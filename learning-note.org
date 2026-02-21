@@ -78,26 +78,3 @@ PyTorch 框架。
 - **Symmetry**: 在數據處理時 (`data_processing_pytorch.py`)，會隨機應用旋轉和翻
   轉對稱性增強數據。
 
-* 驗證參考 (Verification References)
-以下列出程式碼中的關鍵字與檔案位置，供查證上述架構細節：
-
-** 輸入層
-- **22 Channels**: `python/katago/train/modelconfigs.py` 搜尋 `get_num_bin_input_features` (回傳 22)。
-- **19 Global Features**: `python/katago/train/modelconfigs.py` 搜尋 `get_num_global_input_features` (回傳 19)。
-- **Metadata**: `python/katago/train/model_pytorch.py` 搜尋 `class MetadataEncoder`。
-
-** 主幹架構
-- **Residual Blocks**: `python/katago/train/model_pytorch.py` 搜尋 `class ResBlock`, `class BottleneckResBlock`, `class NestedBottleneckResBlock`.
-- **Normalization**: `python/katago/train/model_pytorch.py` 搜尋 `class NormMask`. 關鍵字: `bnorm`, `brenorm`, `fixup`.
-- **Activation**: `python/katago/train/model_pytorch.py` 搜尋 `def act(`. 關鍵字: `relu`, `mish`, `gelu`.
-- **Global Pooling**: `python/katago/train/model_pytorch.py` 搜尋 `class KataGPool`. 注意 `out_pool1` (mean), `out_pool2` (scaled mean), `out_pool3` (max).
-
-** 輸出頭
-- **Policy Head**: `python/katago/train/model_pytorch.py` 搜尋 `class PolicyHead`.
-  - Pass Output: 搜尋 `self.linear_pass`.
-- **Value Head**: `python/katago/train/model_pytorch.py` 搜尋 `class ValueHead`.
-  - Sub-heads: 搜尋 `linear_valuehead`, `linear_miscvaluehead`, `conv_ownership`, `conv_scoring`.
-
-** 特殊機制
-- **Masking**: `python/katago/train/model_pytorch.py` 搜尋 `mask` 參數的使用 (例如在 `NormMask.forward` 或 `KataGPool.forward` 中)。
-- **Symmetry**: `python/katago/train/data_processing_pytorch.py` 搜尋 `def apply_symmetry`.
