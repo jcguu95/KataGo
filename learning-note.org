@@ -1,6 +1,5 @@
 #+TITLE: KataGo 模型架構學習筆記
 #+AUTHOR: Jin-Cheng Guu & Gemini
-#+DATE: 2023
 
 * 概述 (Overview)
 KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網路 (ResNet) 架構。它
