@@ -6,75 +6,96 @@
 KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網路 (ResNet) 架構。它
 接受棋盤狀態作為輸入，並輸出策略 (Policy) 和價值 (Value) 預測。此實作使用
 PyTorch 框架。
+- 核心代碼: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `Model`)
 
 * 輸入層 (Inputs)
 模型接受三種主要類型的輸入：
 1. **二值空間輸入 (Binary Spatial Input, NCHW)**: 形狀為 `[Batch, 22, BoardSize,
    BoardSize]`。包含棋盤上的棋子位置、歷史紀錄、氣 (liberties) 等特徵。
+   - 特徵數量定義: [[file:python/katago/train/modelconfigs.py][python/katago/train/modelconfigs.py]] (`get_num_bin_input_features`)
+   - 數據讀取: [[file:python/katago/train/data_processing_pytorch.py][python/katago/train/data_processing_pytorch.py]] (`read_npz_training_data`)
 2. **全域輸入 (Global Input, NC)**: 形狀為 `[Batch, 19]`。包含貼目 (Komi)、遊戲
    階段等全域資訊。
+   - 特徵數量定義: [[file:python/katago/train/modelconfigs.py][python/katago/train/modelconfigs.py]] (`get_num_global_input_features`)
 3. **元數據輸入 (Metadata Input)** (可選): 用於編碼額外的元數據。
+   - 實作: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `MetadataEncoder`)
 
 * 主幹架構 (Trunk Architecture)
 主幹網路負責提取特徵，由以下部分組成：
 
 ** 1. 初始處理
 - **空間卷積**: 使用卷積層處理 22 個通道的空間輸入。
+  - 代碼: `Model.__init__` 中的 `self.conv_spatial`
 - **全域特徵融合**: 全域輸入經過線性層處理後，加到空間特徵中。
+  - 代碼: `Model.forward` 中的 `x_global` 加法
 - **元數據編碼器 (MetadataEncoder)**: 如果啟用，元數據會經過編碼並加入特徵中。
+  - 代碼: `Model.forward` 中的 `self.metadata_encoder`
 
 ** 2. 殘差區塊 (Residual Blocks)
 模型由多個殘差區塊堆疊而成。`modelconfigs.py` 定義了不同的區塊類型：
-- **Regular ResBlock**: 標準的兩個卷積層殘差塊。
-- **Bottleneck ResBlock**: 使用 1x1 卷積壓縮通道數，減少計算量。
-- **Nested Bottleneck ResBlock**: 嵌套結構，內部包含多個子區塊。
-- **Dilated Blocks**: 使用空洞卷積 (Dilation) 擴大感受野。
+- 設定檔: [[file:python/katago/train/modelconfigs.py][python/katago/train/modelconfigs.py]]
+- 實作: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]]
+  - **Regular ResBlock**: 標準的兩個卷積層殘差塊 (class `ResBlock`).
+  - **Bottleneck ResBlock**: 使用 1x1 卷積壓縮通道數，減少計算量 (class `BottleneckResBlock`).
+  - **Nested Bottleneck ResBlock**: 嵌套結構，內部包含多個子區塊 (class `NestedBottleneckResBlock`).
+  - **Dilated Blocks**: 使用空洞卷積 (Dilation) 擴大感受野 (class `DilationNestedBottleneckResBlock`).
 
 ** 3. 正規化與激活函數 (Normalization & Activation)
 - **NormMask**: 自定義的正規化層。它會處理棋盤邊界外的 Mask (遮罩)，確保填充區域
   不影響統計數據。
+  - 實作: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `NormMask`)
 - **正規化類型**: 支援 Batch Normalization (`bnorm`)、Batch Renormalization
   (`brenorm`) 以及 Fixup Initialization (`fixup`, `fixscale`)。Fixup 允許在沒
   有 Batch Norm 的情況下訓練深層網路。
+  - 參數: `config["norm_kind"]`
 - **激活函數**: 支援 ReLU, Mish, GELU, ELU 等。
+  - 實作: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (function `act`)
 
 ** 4. 全域池化 (Global Pooling)
 - **KataGPool**: 一種自定義的池化層。它不僅計算平均值 (Mean)，還計算最大值 (Max)
   和一個與 Mask 總和相關的縮放平均值。這有助於模型理解棋盤大小和全局局勢。
+  - 實作: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `KataGPool`)
 
 * 輸出頭 (Heads)
 主幹網路的輸出會分流到兩個主要的頭：策略頭 (Policy Head) 和價值頭 (Value Head)。
 
 ** 1. 策略頭 (Policy Head)
 - **目標**: 預測下一步的最佳落子位置。
+- **實作**: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `PolicyHead`)
 - **結構**:
-  - 分為 `p` (policy) 和 `g` (global) 兩個分支。
+  - 分為 `p` (policy) 和 `g` (global) 兩個分支 (`conv1p`, `conv1g`)。
   - `g` 分支經過 `KataGPool` 提取全域資訊。
-  - 兩者融合後，經過卷積輸出 Logits。
-  - 包含一個專門的線性層來預測 **Pass (虛手)** 的機率。
+  - 兩者融合後，經過卷積輸出 Logits (`conv2p`)。
+  - 包含一個專門的線性層來預測 **Pass (虛手)** 的機率 (`linear_pass`)。
 - **輸出**: 包含策略預測、對手回應預測、樂觀策略 (Optimistic Policy) 等。
+  - 損失函數: [[file:python/katago/train/metrics_pytorch.py][python/katago/train/metrics_pytorch.py]] (`loss_policy_player_samplewise`)
 
 ** 2. 價值頭 (Value Head)
 - **目標**: 預測遊戲結果和各種輔助目標。
+- **實作**: [[file:python/katago/train/model_pytorch.py][python/katago/train/model_pytorch.py]] (class `ValueHead`)
 - **結構**:
   - 使用 `KataValueHeadGPool` 進行池化。
   - 包含多個子頭 (Sub-heads) 預測不同目標。
 - **主要輸出**:
-  - **Win/Loss/NoResult**: 勝負平的機率。
-  - **Score**: 預測最終目數差。
+  - **Win/Loss/NoResult**: 勝負平的機率 (`linear_valuehead`)。
+  - **Score**: 預測最終目數差 (`linear_miscvaluehead`)。
 - **輔助輸出**:
-  - **Ownership**: 預測每個交叉點最終屬於黑方或白方。
-  - **Score Belief**: 目數差的機率分佈。
-  - **Lead**: 當前領先目數。
-  - **Variance Time**: 局勢的複雜度/變數。
-  - **Short-term Error**: 預測短期的價值和目數誤差。
-  - **Seki**: 預測雙活區域。
+  - **Ownership**: 預測每個交叉點最終屬於黑方或白方 (`conv_ownership`)。
+  - **Score Belief**: 目數差的機率分佈 (`linear_s3`, `linear_smix`)。
+  - **Lead**: 當前領先目數 (`linear_miscvaluehead`)。
+  - **Variance Time**: 局勢的複雜度/變數 (`linear_miscvaluehead`)。
+  - **Short-term Error**: 預測短期的價值和目數誤差 (`linear_moremiscvaluehead`)。
+  - **Seki**: 預測雙活區域 (`conv_seki`)。
+- **損失函數**: [[file:python/katago/train/metrics_pytorch.py][python/katago/train/metrics_pytorch.py]] (class `Metrics`)
 
 * 特殊機制
 - **Masking**: 由於圍棋棋盤大小不一 (如 9x9, 19x19)，模型在卷積和池化時會使用
   Mask 來忽略棋盤外的填充值 (Padding)。
+  - 代碼: `Model.forward` 中計算 `mask` 和 `mask_sum`。
 - **Intermediate Heads**: 在主幹網路的中間層可以附加額外的策略和價值頭，用於輔助
   訓練或模型蒸餾。
+  - 設定: [[file:python/katago/train/modelconfigs.py][python/katago/train/modelconfigs.py]] (`has_intermediate_head`)
+  - 實作: `Model.forward` 中處理 `self.intermediate_head_blocks`。
 - **Symmetry**: 在數據處理時 (`data_processing_pytorch.py`)，會隨機應用旋轉和翻
   轉對稱性增強數據。
-
+  - 實作: [[file:python/katago/train/data_processing_pytorch.py][python/katago/train/data_processing_pytorch.py]] (`apply_symmetry`)
