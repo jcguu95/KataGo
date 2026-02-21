@@ -1,14 +1,18 @@
 #+TITLE: KataGo 模型架構學習筆記
-#+AUTHOR: AI Assistant
+#+AUTHOR: Jin-Cheng Guu & Gemini
 #+DATE: 2023
 
 * 概述 (Overview)
-KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網路 (ResNet) 架構。它接受棋盤狀態作為輸入，並輸出策略 (Policy) 和價值 (Value) 預測。此實作使用 PyTorch 框架。
+KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網路 (ResNet) 架構。它
+接受棋盤狀態作為輸入，並輸出策略 (Policy) 和價值 (Value) 預測。此實作使用
+PyTorch 框架。
 
 * 輸入層 (Inputs)
 模型接受三種主要類型的輸入：
-1. **二值空間輸入 (Binary Spatial Input, NCHW)**: 形狀為 `[Batch, 22, BoardSize, BoardSize]`。包含棋盤上的棋子位置、歷史紀錄、氣 (liberties) 等特徵。
-2. **全域輸入 (Global Input, NC)**: 形狀為 `[Batch, 19]`。包含貼目 (Komi)、遊戲階段等全域資訊。
+1. **二值空間輸入 (Binary Spatial Input, NCHW)**: 形狀為 `[Batch, 22, BoardSize,
+   BoardSize]`。包含棋盤上的棋子位置、歷史紀錄、氣 (liberties) 等特徵。
+2. **全域輸入 (Global Input, NC)**: 形狀為 `[Batch, 19]`。包含貼目 (Komi)、遊戲
+   階段等全域資訊。
 3. **元數據輸入 (Metadata Input)** (可選): 用於編碼額外的元數據。
 
 * 主幹架構 (Trunk Architecture)
@@ -27,12 +31,16 @@ KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網�
 - **Dilated Blocks**: 使用空洞卷積 (Dilation) 擴大感受野。
 
 ** 3. 正規化與激活函數 (Normalization & Activation)
-- **NormMask**: 自定義的正規化層。它會處理棋盤邊界外的 Mask (遮罩)，確保填充區域不影響統計數據。
-- **正規化類型**: 支援 Batch Normalization (`bnorm`)、Batch Renormalization (`brenorm`) 以及 Fixup Initialization (`fixup`, `fixscale`)。Fixup 允許在沒有 Batch Norm 的情況下訓練深層網路。
+- **NormMask**: 自定義的正規化層。它會處理棋盤邊界外的 Mask (遮罩)，確保填充區域
+  不影響統計數據。
+- **正規化類型**: 支援 Batch Normalization (`bnorm`)、Batch Renormalization
+  (`brenorm`) 以及 Fixup Initialization (`fixup`, `fixscale`)。Fixup 允許在沒
+  有 Batch Norm 的情況下訓練深層網路。
 - **激活函數**: 支援 ReLU, Mish, GELU, ELU 等。
 
 ** 4. 全域池化 (Global Pooling)
-- **KataGPool**: 一種自定義的池化層。它不僅計算平均值 (Mean)，還計算最大值 (Max) 和一個與 Mask 總和相關的縮放平均值。這有助於模型理解棋盤大小和全局局勢。
+- **KataGPool**: 一種自定義的池化層。它不僅計算平均值 (Mean)，還計算最大值 (Max)
+  和一個與 Mask 總和相關的縮放平均值。這有助於模型理解棋盤大小和全局局勢。
 
 * 輸出頭 (Heads)
 主幹網路的輸出會分流到兩個主要的頭：策略頭 (Policy Head) 和價值頭 (Value Head)。
@@ -63,6 +71,9 @@ KataGo 的模型是一個深度卷積神經網路 (CNN)，主要基於殘差網�
   - **Seki**: 預測雙活區域。
 
 * 特殊機制
-- **Masking**: 由於圍棋棋盤大小不一 (如 9x9, 19x19)，模型在卷積和池化時會使用 Mask 來忽略棋盤外的填充值 (Padding)。
-- **Intermediate Heads**: 在主幹網路的中間層可以附加額外的策略和價值頭，用於輔助訓練或模型蒸餾。
-- **Symmetry**: 在數據處理時 (`data_processing_pytorch.py`)，會隨機應用旋轉和翻轉對稱性增強數據。
+- **Masking**: 由於圍棋棋盤大小不一 (如 9x9, 19x19)，模型在卷積和池化時會使用
+  Mask 來忽略棋盤外的填充值 (Padding)。
+- **Intermediate Heads**: 在主幹網路的中間層可以附加額外的策略和價值頭，用於輔助
+  訓練或模型蒸餾。
+- **Symmetry**: 在數據處理時 (`data_processing_pytorch.py`)，會隨機應用旋轉和翻
+  轉對稱性增強數據。
