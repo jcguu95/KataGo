@@ -87,6 +87,54 @@ PyTorch 框架。
   - **Seki**: 預測雙活區域 (`conv_seki`)。
 - **損失函數**: [[file:python/katago/train/metrics_pytorch.py][python/katago/train/metrics_pytorch.py]] (class `Metrics`)
 
+* 模型初始化與結構細節 (Model Initialization & Structure Details)
+模型的具體結構是在 `python/katago/train/model_pytorch.py` 的 `Model` 類別初始化時定義的。
+架構參數（如層數、通道數、區塊類型）來自 `python/katago/train/modelconfigs.py` 中的設定檔。
+
+** 初始化邏輯 (Initialization Logic)
+- **位置**: `python/katago/train/model_pytorch.py` -> `Model.__init__`
+- **流程**:
+  1. 讀取設定參數 (如 `trunk_num_channels`, `block_kind`)。
+  2. 建立初始卷積層 (`conv_spatial`) 和全域特徵層 (`linear_global`)。
+  3. 遍歷 `config["block_kind"]` 列表，根據類型建立對應的殘差區塊 (Block)。
+  4. 將區塊加入 `self.blocks` (ModuleList)。
+  5. 建立策略頭 (`PolicyHead`) 和價值頭 (`ValueHead`)。
+
+** 區塊結構 (Block Structures)
+根據 `config["block_kind"]` 的定義，主要有以下幾種區塊：
+
+*** 1. 標準殘差塊 (ResBlock)
+- **對應字串**: "regular"
+- **類別**: `ResBlock`
+- **結構**:
+  1. `NormActConv` (3x3 卷積, 通道數變為 `mid_num_channels`)
+  2. `NormActConv` (3x3 卷積, 通道數變回 `trunk_num_channels`)
+  3. Skip Connection (輸入 + 輸出)
+
+*** 2. 瓶頸殘差塊 (Bottleneck ResBlock)
+- **對應字串**: "bottle", "bottle1", "bottle2", "bottle3"
+- **類別**: `BottleneckResBlock`
+- **結構**:
+  1. `NormActConv` (1x1 卷積, 降維至 `mid_num_channels`)
+  2. 堆疊 1~3 個 3x3 的 `NormActConv`
+  3. `NormActConv` (1x1 卷積, 升維回 `trunk_num_channels`)
+  4. Skip Connection
+
+*** 3. 嵌套瓶頸殘差塊 (Nested Bottleneck ResBlock)
+- **對應字串**: "bottlenest2", "bottlenest3"
+- **類別**: `NestedBottleneckResBlock`
+- **結構**:
+  1. `NormActConv` (1x1 卷積, 降維至 `mid_num_channels`)
+  2. 堆疊多個 `ResBlock` (在 `mid_num_channels` 上運作)
+  3. `NormActConv` (1x1 卷積, 升維回 `trunk_num_channels`)
+  4. Skip Connection
+
+** 設定範例 (Configuration Examples)
+參見 `python/katago/train/modelconfigs.py`:
+- **b10c128**: 10 個 `regular` 區塊, Trunk 128 通道。
+- **b40c256**: 40 個 `regular` 區塊, Trunk 256 通道。
+- **b20c384bt**: 20 個 `bottle` 區塊, Trunk 384 通道。
+
 * 特殊機制
 - **Masking**: 由於圍棋棋盤大小不一 (如 9x9, 19x19)，模型在卷積和池化時會使用
   Mask 來忽略棋盤外的填充值 (Padding)。
