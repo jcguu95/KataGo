@@ -146,3 +146,50 @@ PyTorch 框架。
 - **Symmetry**: 在數據處理時 (`data_processing_pytorch.py`)，會隨機應用旋轉和翻
   轉對稱性增強數據。
   - 實作: [[file:python/katago/train/data_processing_pytorch.py][python/katago/train/data_processing_pytorch.py]] (`apply_symmetry`)
+
+* 設定檔分析範例 (Configuration Analysis Example): b1c6nbt
+這是一個極微小的模型設定，通常用於測試或極端受限的環境。名稱暗示了 "1 Block, 6 Channels, Nested Bottleneck"。
+
+#+BEGIN_SRC python
+b1c6nbt = {
+    "version":15,
+    "norm_kind":"fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "trunk_num_channels":6,
+    "mid_num_channels":4,
+    "gpool_num_channels":4,
+    "use_attention_pool":False,
+    "gamma_weight_decay_center_1":True,
+    "num_attention_pool_heads":2,
+    "block_kind": [
+        ["rconv1","bottlenest2"],
+    ],
+    "p1_num_channels":4,
+    "g1_num_channels":4,
+    "v1_num_channels":4,
+    "sbv2_num_channels":4,
+    "num_scorebeliefs":2,
+    "v2_size":6,
+}
+#+END_SRC
+
+** 詳細解讀
+- **基本參數**:
+  - `version`: 15。對應 V7 特徵集，以及特定的輸出頭架構 (如 Policy Head 的 Pass 處理方式)。
+  - `norm_kind`: "fixup"。使用 Fixup Initialization，這通常意味著在殘差塊中不使用 Batch Normalization，而是透過特定的權重初始化來保持訊號穩定。
+- **通道數 (Channels)**:
+  - `trunk_num_channels`: 6。主幹網路只有 6 個通道，非常少 (標準大模型可能有 256 或 384)。
+  - `mid_num_channels`: 4。殘差塊內部的中間層通道數。
+- **區塊結構 (Block Structure)**:
+  - `block_kind`: 只有一個區塊 `["rconv1", "bottlenest2"]`。
+  - `bottlenest2` 對應 `NestedBottleneckResBlock`，內部長度為 2。這意味著雖然只有一個 "Block"，但它內部包含了一個降維層、兩個子殘差塊、一個升維層。
+- **池化 (Pooling)**:
+  - `gpool_num_channels`: 4。全域池化層輸出的通道數。
+  - `use_attention_pool`: False。不使用注意力池化，使用標準的 `KataGPool`。
+- **輸出頭 (Heads)**:
+  - `p1_num_channels`, `g1_num_channels`: 4。策略頭的卷積層通道數。
+  - `v1_num_channels`: 4。價值頭的卷積層通道數。
+  - `v2_size`: 6。價值頭全連接層的大小。
+  - `num_scorebeliefs`: 2。目數差機率分佈的數量 (用於混合高斯分佈等)。
