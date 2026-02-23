@@ -36,6 +36,21 @@
 - *Trunk (主幹)*: 負責提取通用的特徵 (如棋形、死活、厚薄)。這部分是 Policy 和 Value 共用的，由 28 個殘差區塊組成。
 - *Head (頭部)*: 負責將提取出的特徵轉換為具體的預測任務結果。KataGo 主要有 Policy Head (預測落子) 和 Value Head (預測勝負)。
 
+**** 最後一個區塊 (Block 27) 的性質
+- 主幹共有 28 個區塊 (Block 0 到 Block 27)。
+- **Block 27** 是主幹的最後一層，它的輸出是 Policy Head 和 Value Head 的**共同輸入**。
+- 因此，Block 27 的輸出張量混合了策略與價值所需的特徵資訊。資料流在此之後才會分叉 (Branching)，分別進入兩個頭部。
+
+*** 全域池化層的位置 (Location of Global Pooling)
+全域池化 (Global Pooling) 在模型中主要位於以下位置：
+1. **Value Head 內部**:
+   - 這是最主要的全域池化層。
+   - 位於 Value Head 的卷積層之後、全連接層之前。
+   - 作用是將 $19 \times 19$ 的空間特徵圖壓縮為向量，以便預測全盤的勝率與目數。
+2. **特定主幹區塊 (bottlenest2gpool)**:
+   - 在 =train/modelconfigs.py= 定義的區塊類型中，=bottlenest2gpool= 包含全域池化分支。
+   - 作用是提取全局上下文 (Global Context) 並將其加回特徵流中（類似 Squeeze-and-Excitation），讓主幹的中間層也能感知全盤資訊。
+
 *** 中間頭 (Intermediate Heads)
 在 =train/modelconfigs.py= 的末尾，程式碼會自動生成帶有 =-ih= 或 =-bnh= 等後綴的配置變體。
 - *目的*:
