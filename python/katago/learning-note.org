@@ -41,6 +41,41 @@
 - **Block 27** 是主幹的最後一層，它的輸出是 Policy Head 和 Value Head 的**共同輸入**。
 - 因此，Block 27 的輸出張量混合了策略與價值所需的特徵資訊。資料流在此之後才會分叉 (Branching)，分別進入兩個頭部。
 
+**** 程式碼對應 (Code Correspondence)
+在 =train/model_pytorch.py= 的 =Model= 類別中的 =forward= 方法可以看到主幹的串接與頭部連接的具體實作：
+
+1. *主幹區塊串接 (Trunk Block Chaining)*:
+   28 個區塊是透過 Python 的 =for= 迴圈串接起來的。輸入張量 =out= 在迴圈中不斷被更新，前一個區塊的輸出直接成為下一個區塊的輸入。
+   #+BEGIN_SRC python
+   for block in self.blocks:
+       out = block(out, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, extra_outputs=extra_outputs)
+   #+END_SRC
+
+2. *主幹的最後處理*:
+   #+BEGIN_SRC python
+   out = self.norm_trunkfinal(out, mask=mask, mask_sum=mask_sum)
+   out = self.act_trunkfinal(out)
+   #+END_SRC
+   這是主幹網路的最後一次正規化 (Normalization) 與激活 (Activation)。
+
+3. *連接頭部*:
+   緊接著，=out= 變數被傳入 =self.policy_head= 與 =self.value_head=。這證實了主幹輸出直接分叉進入策略頭與價值頭：
+   #+BEGIN_SRC python
+   out_policy = self.policy_head(
+       out,
+       mask=mask_fp32,
+       # ...
+   )
+   (
+       out_value,
+       # ...
+   ) = self.value_head(
+       out,
+       mask=mask_fp32,
+       # ...
+   )
+   #+END_SRC
+
 *** 全域池化層的位置 (Location of Global Pooling)
 全域池化 (Global Pooling) 在模型中主要位於以下位置：
 1. **Value Head 內部**:
@@ -175,6 +210,16 @@ SAE 應針對模型的 *殘差流 (Residual Stream)* 進行訓練。
 *** 全域池化層 (Global Pooling Layer)
 - *位置*: =train/model_pytorch.py= 中 =Model.forward= 的 =self.linear_global= 之前的輸入，或是 =gpool= 的輸出。
 - *意義*: 這裡匯聚了全盤資訊，適合尋找 "黑方優勢"、"劫爭狀態"、"進入收官" 等全域概念。
+
+*** 為什麼不使用 Policy Head 的末端層 (Why not Policy Head layers)
+雖然 Policy Head 的輸出直接對應落子，但不建議將其末端層作為 SAE 的主要訓練目標，原因如下：
+1. *通道數瓶頸 (Channel Bottleneck)*:
+   - 主幹 (Trunk) 擁有 512 個通道，提供了足夠的高維空間來容納稀疏特徵 (Sparse Features)。
+   - Policy Head 為了節省計算量，迅速將通道數降至 48 (=p1_num_channels=)。這種劇烈的降維 (Compression) 迫使資訊以非常稠密 (Dense) 的方式編碼，不利於 SAE 提取可解釋的稀疏概念。
+2. *任務過度專一 (Task Specificity)*:
+   - Policy Head 的末端層高度專注於 "下一步哪裡最好"，而非 "現在盤面發生了什麼"。
+   - 許多重要的圍棋概念 (如死活、厚薄、領地) 是靜態評估，它們存在於主幹中以同時供給 Value Head (判斷勝率) 和 Policy Head。
+   - 在 Policy Head 的末端，如果某個概念不導致 "落子" (例如：一塊已經死透的棋，不需要再下)，該資訊可能會被過濾掉，導致 SAE 無法學到完整的棋理概念。
 
 ** 2. 驗證與解釋 (Validation & Interpretation)
 利用 KataGo 豐富的 Head 輸出作為 "Ground Truth" 來解釋 SAE 發現的特徵 (Features)。
