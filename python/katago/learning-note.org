@@ -62,12 +62,66 @@
    - 遞迴呼叫各層的 =initialize= 方法。
    - 最終使用 =init_weights= 函式，根據激活函數 (activation) 和扇入 (fan-in) 計算標準差，使用截斷常態分佈 (truncated normal distribution) 填入張量數據。
 
-** TODO Policy Head
+** Policy Head (策略頭)
+策略頭定義於 =train/model_pytorch.py= 中的 =PolicyHead= 類別。
+它負責預測下一步棋的落點機率分佈以及相關的 Q 值資訊。
 
-[LLM, please write what it predicts here, in details.]
+*** 輸出通道 (Output Channels)
+輸出通道數 (=num_policy_outputs=) 依據模型版本 (=version=) 而定：
+- Version <= 11: 4 個通道
+- Version <= 15: 6 個通道
+- Version > 15: 8 個通道
 
-** TODO Value Head
-[LLM, please write what it predicts here, in details.]
+這意味著對於棋盤上的每一個交叉點（以及虛手 Pass），模型都會輸出一個 8 維的向量（在 Version > 15 時）。
+這 8 個數值分別代表不同的含義，例如該點作為下一手的機率 logits，或是該點對應的預期勝率 Q 值。
+
+*** 輸出內容 (Outputs)
+根據程式碼註釋 (=train/model_pytorch.py= 中的 =PolicyHead= 類別)，各通道代表的意義如下：
+1. *Policy (0)*: 標準策略預測 (logits)，即當前玩家的最佳落子機率。
+2. *Opponent Reply Policy (1)*: 預測對手對當前玩家落子的回應機率。
+3. *Soft Policy (2)*: 軟策略，通常是經過溫度調整或平滑化的分佈，用於輔助訓練。
+4. *Soft Opponent Reply Policy (3)*: 對手的軟策略回應。
+5. *Long-term Optimistic Policy (4)*: 長期樂觀策略。這是一個策略分佈，傾向於那些在長期模擬中表現較好的移動。
+6. *Short-term Optimistic Policy (5)*: 短期樂觀策略。這是一個策略分佈，傾向於那些在短期內誤差較小的移動。
+7. *Q-value Win/Loss (6)*: (Version > 15) 策略頭預測的勝率 Q 值 (pre-tanh)。這是針對該位置落子的勝率估計。
+8. *Q-value Score (7)*: (Version > 15) 策略頭預測的目數 Q 值。這是針對該位置落子的預期目數估計。
+
+*** 輸出形狀 (Output Shape)
+輸出經過處理後，會將棋盤上的點與 Pass (虛手) 結合。
+- 棋盤部分：=(Batch, Channels, Height * Width)=
+- Pass 部分：=(Batch, Channels, 1)=
+- 最終輸出：=(Batch, Channels, Height * Width + 1)=
+
+其中：
+- *Batch*: 批次大小 (Batch Size)，即一次同時處理的棋局數量。
+- *Channels*: 上述的 8 個通道。
+- *Height * Width + 1*: 棋盤上的所有點加上一個虛手位置。
+
+** Value Head (價值頭)
+價值頭定義於 =train/model_pytorch.py= 中的 =ValueHead= 類別。
+它不僅預測勝率，還預測多種輔助目標以幫助訓練。
+
+*** 主要預測 (Main Predictions)
+- *勝率 (Value)*: 預測勝 (Win)、敗 (Loss)、無結果 (NoResult) 的機率 (=out_value=)。這是一個長度為 3 的向量。
+- *目數分佈 (Score Belief)*: 預測最終目數差的完整機率分佈 (PDF) (=out_scorebelief_logprobs=)。
+  - 這不是單一數值，而是一個離散的分佈向量（例如長度約 400-800，取決於棋盤大小），每個元素代表最終目數差為特定整數值的機率（對數機率）。
+
+*** 統計量預測 (Statistical Predictions)
+來自 =out_miscvalue= 和 =out_moremiscvalue=：
+- *Score Mean*: 平均目數差。
+- *Score Stdev*: 目數差的標準差。
+- *Lead*: 當前領先目數。
+- *Variance Time*: 與遊戲複雜度或剩餘長度相關的變異數時間。
+- *TD Values*: 時間差分 (Temporal Difference) 預測，涵蓋長期、中期、短期的勝率與目數。
+- *Error Predictions*: 短期勝率與目數的誤差預測 (=shortterm_value_error=, =shortterm_score_error=)。
+
+*** 空間特徵預測 (Spatial Predictions)
+這些預測輸出為棋盤大小的特徵圖：
+- *Ownership*: 每個交叉點最終屬於黑方或白方的機率 (=out_ownership=)。
+- *Scoring*: 最終計地結果 (=out_scoring=)。
+- *Future Position*: 未來棋子位置預測 (=out_futurepos=)。
+- *Seki*: 雙活 (Seki) 狀態預測 (=out_seki=)。
+
 *** 領地歸屬預測 (Ownership Prediction)
 領地歸屬預測由 =train/model_pytorch.py= 中的 =ValueHead= 類別處理。
 - 具體層為 =self.conv_ownership=。
