@@ -1,0 +1,145 @@
+* 模型架構分析
+
+** 模型定義位置
+模型架構定義於 =train/model_pytorch.py=。
+- =Model= 類別是進入點。
+- =__init__= 方法根據配置字典建構層。
+- =initialize= 方法設定初始權重。
+
+*** e.g. `b28c512nbt` 的配置
+模型 `kata1-b28c512nbt...` 的具體形狀和超參數可在 =train/modelconfigs.py= 中的字典鍵 =b28c512nbt= 下找到。
+
+**** 關鍵參數：
+- *主幹通道數 (Trunk Channels)*: 512 (=trunk_num_channels=)
+- *中間通道數 (Mid Channels)*: 256 (=mid_num_channels=)
+- *區塊 (Blocks)*: 總共 28 個區塊。
+  - 區塊類型主要為 =bottlenest2= 和 =bottlenest2gpool=。
+  - =bottlenest2= 意味著在 =train/model_pytorch.py= 中定義的 =NestedBottleneckResBlock= 巢狀瓶頸殘差區塊結構。
+- *全域池化通道數 (Global Pooling Channels)*: 64 (=gpool_num_channels=)
+- *頭部通道數 (Head Channels)*:
+  - 策略頭 (Policy head): 48 通道 (=p1_num_channels=)
+  - 價值頭 (Value head): 48 通道 (=v1_num_channels=)
+
+**** 檔名後綴
+`kata1-b28c512nbt-s7944987392-d4526094999.bin.gz` 中的後綴未在程式碼中定義，但遵循標準 KataGo 慣例：
+- =s7944987392=: 指生成的自我對弈 *樣本 (samples)* 數量 (約 79 億)。
+- =d4526094999=: 指訓練 *數據 (data)* 量或訓練 "天數" (約 45 億)。
+
+*** 中間頭 (Intermediate Heads)
+在 =train/modelconfigs.py= 的末尾，程式碼會自動生成帶有 =-ih= 或 =-bnh= 等後綴的配置變體。
+- *目的*:
+  - **自我蒸餾 (Self-distillation)**: 讓模型的中間層也能預測結果，輔助訓練。
+  - **嵌入小模型 (Embedding)**: 模擬一個較小的網路嵌入在較大的網路中。
+- *實作*:
+  - =-ih=: 通常在區塊數的一半處 (=len(config["block_kind"]) // 2=) 加入額外的策略與價值頭。
+  - =-bnh=: 在最後加入一個並行的頭部，通常用於區分訓練時的 Batch Norm 行為與推理時的行為 (一個頭用於驅動優化，另一個用於推理)。
+
+** 初始化邏輯
+模型在 =train/model_pytorch.py= 中的 =Model.initialize= 方法進行初始化。
+- 如配置中所指定，它使用 "Fixup" 初始化 (=norm_kind="fixup"=)。
+- 權重使用 =init_weights= 進行初始化，通常使用根據激活增益 (activation gain) 和扇入 (fan-in) 縮放的截斷常態分佈。
+- 對於 Fixup，會根據區塊數量應用特定的縮放因子 (例如：=scale=math.pow(fixup_scale, 1.0 / (1.0 + self.internal_length))=)。
+
+*** 配置轉換流程 (Configuration Transformation Process)
+
+1. *配置選取 (Configuration Selection)*
+   在 =train/modelconfigs.py= 中，字串鍵 (如 "b28c512nbt") 對應到具體的 Python 字典。這些字典定義了模型的超參數 (層數、通道數、區塊類型等)。
+
+2. *模型載入 (Model Loading)*
+   通常透過 =train/load_model.py= 中的 =load_model= 函式。
+   - 它會讀取檢查點 (checkpoint) 或 =model.config.json= 來取得上述的配置字典 (=model_config=)。
+
+3. *模型實例化 (Model Instantiation)*
+   =load_model= 呼叫 =train/model_pytorch.py= 中的 =Model= 類別建構子 (=__init__=)，傳入配置字典。
+   - =Model.__init__= 解析字典中的參數 (如 =trunk_num_channels=, =block_kind=)。
+   - 根據 =block_kind= 列表中的字串 (如 "bottlenest2")，動態建立對應的 PyTorch 模組 (如 =NestedBottleneckResBlock=) 並加入 =self.blocks=。
+   - 建立 =PolicyHead= 和 =ValueHead=。
+     例如，`policy_head` 初始化於 `train/model_pytorch.py` 中的 `        self.policy_head = PolicyHead(`，建議讀者若有興趣可於程式碼庫中搜尋該字串。
+
+4. *權重初始化 (Weight Initialization)*
+   實例化後，呼叫 =model.initialize()=。
+   - 根據配置中的 =norm_kind= (如 "fixup") 決定初始化策略。
+   - 遞迴呼叫各層的 =initialize= 方法。
+   - 最終使用 =init_weights= 函式，根據激活函數 (activation) 和扇入 (fan-in) 計算標準差，使用截斷常態分佈 (truncated normal distribution) 填入張量數據。
+
+** TODO Policy Head
+
+[LLM, please write what it predicts here, in details.]
+
+** TODO Value Head
+[LLM, please write what it predicts here, in details.]
+*** 領地歸屬預測 (Ownership Prediction)
+領地歸屬預測由 =train/model_pytorch.py= 中的 =ValueHead= 類別處理。
+- 具體層為 =self.conv_ownership=。
+- 這是一個卷積層 (=Conv2d=)，輸出通道數為 1，用於預測棋盤上每個點的歸屬。
+- 在 =ValueHead.forward= 中，輸出為 =out_ownership = self.conv_ownership(outv1) * mask=。
+
+** 架構釋疑 (Architecture Q&A)
+
+*** ValueHead 的預測內容
+ValueHead 確實預測了最終目數差的統計量。在 =train/model_pytorch.py= 的 =ValueHead= 類別與 =Model.postprocess_single_heads_output= 中可以看到：
+- =pred_scoremean=: 目數差的平均值 (來自 =out_miscvalue[:, 0]=)。
+- =pred_scorestdev=: 目數差的標準差 (來自 =out_miscvalue[:, 1]=)。
+- =pred_lead=: 當前領先目數 (來自 =out_miscvalue[:, 2]=)。
+- =out_scorebelief_logprobs=: 目數差的完整機率分佈 (Categorical distribution)。
+
+**** Logprobs (Score Belief)
+- *定義*: 這不是無限維度的物件。這是一個離散的機率分佈向量，代表最終目數差 (Score Difference) 的預測。
+- *維度*: 長度約為 `2 * (361 + 60)` (對於 19路棋盤)，涵蓋了從大敗到大勝的所有可能目數差整數值。
+- *訓練*:
+  - 目標 (`target`): 來自 MCTS 搜索樹中各個葉子節點的目數統計，或是最終遊戲結果的平滑分佈。
+  - 損失函數: 同時使用 PDF (機率密度) 的交叉熵損失 (`loss_scorebelief_pdf`) 和 CDF (累積分布) 的均方差損失 (`loss_scorebelief_cdf`)。這讓模型能學習到分佈的形狀與集中趨勢。
+- *呈現*: 輸出為 `log_softmax` 後的結果，即每個可能目數差的對數機率。
+
+*** __init__, forward, backward
+- =__init__=: 定義網路的「組件」或「層」(Layers)，例如卷積層 (=Conv2d=)、全連接層 (=Linear=)。這裡決定了參數空間和形狀 (輸入/輸出通道數)，但尚未定義它們如何連接。
+- =forward=: 定義數據的「流向」或「拓撲結構」。這裡決定了張量如何通過上述組件，包括殘差連接 (=x + out=)、分支 (Heads) 以及形狀變換。
+**** backward
+- PyTorch 使用 *自動微分 (Automatic Differentiation / Autograd)* 機制。
+- 當你在 =forward= 中使用 PyTorch 的張量運算 (如加法、乘法、卷積) 時，PyTorch 會自動建立計算圖 (Computational Graph)。
+- =backward= 方法會根據這個計算圖和微積分的連鎖律 (Chain Rule) 自動生成，因此開發者通常不需要手動撰寫 =backward=。
+- 唯一例外是像 =train/model_pytorch.py= 中的 =SoftPlusWithGradientFloorFunction=，這是一個自定義的 Autograd 函數，所以必須手動實作 =forward= 和 =backward= 來定義其特殊的梯度行為。
+
+*** 連接資訊範例 (Connection Info Example)
+連接資訊確實位於 =Model.forward= 中。
+- *範例*: 在 =train/model_pytorch.py= 的 =Model.forward= 方法中：
+  #+BEGIN_SRC python
+  x_spatial = self.conv_spatial(input_spatial)
+  x_global = self.linear_global(input_global).unsqueeze(-1).unsqueeze(-1)
+  out = x_spatial + x_global
+  #+END_SRC
+  這段程式碼明確定義了 =input_spatial= 通過 =conv_spatial=，=input_global= 通過 =linear_global=，然後兩者的結果被 *相加* (=+=)。這就是定義網路拓撲結構（連接方式）的地方。
+
+**** 什麼是層 (What is a Layer?)
+- *定義*: 層可以被視為一個 *映射 (Map)*，它將一個向量空間（輸入）變換到另一個向量空間（輸出）。
+- *向量空間*: 層的定義（如 =in_channels=, =out_channels=）隱式地定義了它所連接的輸入和輸出向量空間的維度。
+- *實例*: 例如 =nn.Linear(19, 512)= 定義了一個從 19 維空間到 512 維空間的線性變換。
+
+**** 向量空間運算與複合 (Vector Space Operations & Composition)
+- *加法運算 (+)*:
+  - 在 =Model.forward= 中的 =out = x_spatial + x_global=，這裡的 =+= 是 **向量分量和 (Vector Entry Sum)** (配合廣播 Broadcasting)，而非向量空間直和 (Direct Sum)。
+  - =x_spatial= 是 $(N, C, H, W)$，=x_global= 是 $(N, C, 1, 1)$。
+  - 運算時，=x_global= 被複製擴展到每個空間位置 $(h, w)$，然後與該位置的 =x_spatial= 向量進行元素相加。這在幾何上相當於將全域資訊平移到每個局部特徵上。
+
+- *線性映射複合 (Linear Map Composition)*:
+  - 每一層 (Layer) 都是一個映射 $T: U \to V$。
+  - 程式碼中的連續呼叫即為映射的複合 (Composition)。
+  - *範例*: 在 =train/model_pytorch.py= 的 =ResBlock.forward= 方法中：
+    #+BEGIN_SRC python
+    out = self.normactconv1(out, ...)  # 映射 f: U -> V
+    out = self.normactconv2(out, ...)  # 映射 g: V -> W
+    # 此處 out 變成了 g(f(x))
+    #+END_SRC
+  - 這裡 =normactconv1= 和 =normactconv2= 都是包含卷積 (線性映射) 和非線性激活函數的複合函數。
+
+**** ResBlock 詳解 (ResBlock Details)
+在 =train/model_pytorch.py= 的 =ResBlock.forward= 中：
+#+BEGIN_SRC python
+out = self.normactconv1(out, ...)
+#+END_SRC
+- *normactconv1* 是一個 =NormActConv= 類別的實例。
+- 它代表了殘差區塊中的前半部分運算。
+- *運算順序*: 根據 Pre-activation ResNet 設計，它依序執行：
+  1. *Normalization* (=NormMask=): 如 Batch Norm 或 Fixup。
+  2. *Activation* (=act=): 如 ReLU, Mish。
+  3. *Convolution* (=Conv2d= 或 =KataConvAndGPool=): 線性映射，通常包含降維或特徵提取。
