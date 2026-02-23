@@ -15,6 +15,7 @@
 - *區塊 (Blocks)*: 總共 28 個區塊。
   - 區塊類型主要為 =bottlenest2= 和 =bottlenest2gpool=。
   - =bottlenest2= 意味著在 =train/model_pytorch.py= 中定義的 =NestedBottleneckResBlock= 巢狀瓶頸殘差區塊結構。
+  - *尺寸*: 每個區塊的輸出張量形狀為 $(Batch, 512, 19, 19)$。這意味著在主幹 (Trunk) 的每一層，模型都保持著完整的棋盤空間解析度。
 - *全域池化通道數 (Global Pooling Channels)*: 64 (=gpool_num_channels=)
 - *頭部通道數 (Head Channels)*:
   - 策略頭 (Policy head): 48 通道 (=p1_num_channels=)
@@ -24,6 +25,16 @@
 `kata1-b28c512nbt-s7944987392-d4526094999.bin.gz` 中的後綴未在程式碼中定義，但遵循標準 KataGo 慣例：
 - =s7944987392=: 指生成的自我對弈 *樣本 (samples)* 數量 (約 79 億)。
 - =d4526094999=: 指訓練 *數據 (data)* 量或訓練 "天數" (約 45 億)。
+
+*** 輸入處理 (Input Processing)
+- *linear_global*:
+  - 位於網路的最前端。
+  - 負責處理全域輸入特徵 (Global Inputs)，如貼目 (Komi)、規則設定、對手等級分等標量資訊。
+  - 它將這些標量映射到一個向量空間，然後透過廣播 (Broadcasting) 加到空間特徵圖上 (=out = x_spatial + x_global=)。這讓卷積層在處理局部棋形時，也能 "知道" 當前的全局設定。
+
+*** 主幹與頭部 (Trunk and Heads)
+- *Trunk (主幹)*: 負責提取通用的特徵 (如棋形、死活、厚薄)。這部分是 Policy 和 Value 共用的，由 28 個殘差區塊組成。
+- *Head (頭部)*: 負責將提取出的特徵轉換為具體的預測任務結果。KataGo 主要有 Policy Head (預測落子) 和 Value Head (預測勝負)。
 
 *** 中間頭 (Intermediate Heads)
 在 =train/modelconfigs.py= 的末尾，程式碼會自動生成帶有 =-ih= 或 =-bnh= 等後綴的配置變體。
@@ -54,7 +65,6 @@
    - =Model.__init__= 解析字典中的參數 (如 =trunk_num_channels=, =block_kind=)。
    - 根據 =block_kind= 列表中的字串 (如 "bottlenest2")，動態建立對應的 PyTorch 模組 (如 =NestedBottleneckResBlock=) 並加入 =self.blocks=。
    - 建立 =PolicyHead= 和 =ValueHead=。
-     例如，`policy_head` 初始化於 `train/model_pytorch.py` 中的 `        self.policy_head = PolicyHead(`，建議讀者若有興趣可於程式碼庫中搜尋該字串。
 
 4. *權重初始化 (Weight Initialization)*
    實例化後，呼叫 =model.initialize()=。
@@ -66,6 +76,10 @@
 策略頭定義於 =train/model_pytorch.py= 中的 =PolicyHead= 類別。
 它負責預測下一步棋的落點機率分佈以及相關的 Q 值資訊。
 
+*** 與全域池化的關係
+- Policy Head **不經過** Global Pooling (全域池化)。
+- 因為 Policy 需要輸出 $19 \times 19$ 的機率圖，它必須保留空間資訊。它直接接收 Trunk 的輸出 $(B, 512, 19, 19)$，經過卷積處理後輸出 $(B, 8, 19, 19)$。
+
 *** 輸出通道 (Output Channels)
 輸出通道數 (=num_policy_outputs=) 依據模型版本 (=version=) 而定：
 - Version <= 11: 4 個通道
@@ -73,7 +87,6 @@
 - Version > 15: 8 個通道
 
 這意味著對於棋盤上的每一個交叉點（以及虛手 Pass），模型都會輸出一個 8 維的向量（在 Version > 15 時）。
-這 8 個數值分別代表不同的含義，例如該點作為下一手的機率 logits，或是該點對應的預期勝率 Q 值。
 
 *** 輸出內容 (Outputs)
 根據程式碼註釋 (=train/model_pytorch.py= 中的 =PolicyHead= 類別)，各通道代表的意義如下：
@@ -81,10 +94,10 @@
 2. *Opponent Reply Policy (1)*: 預測對手對當前玩家落子的回應機率。
 3. *Soft Policy (2)*: 軟策略，通常是經過溫度調整或平滑化的分佈，用於輔助訓練。
 4. *Soft Opponent Reply Policy (3)*: 對手的軟策略回應。
-5. *Long-term Optimistic Policy (4)*: 長期樂觀策略。這是一個策略分佈，傾向於那些在長期模擬中表現較好的移動。
-6. *Short-term Optimistic Policy (5)*: 短期樂觀策略。這是一個策略分佈，傾向於那些在短期內誤差較小的移動。
-7. *Q-value Win/Loss (6)*: (Version > 15) 策略頭預測的勝率 Q 值 (pre-tanh)。這是針對該位置落子的勝率估計。
-8. *Q-value Score (7)*: (Version > 15) 策略頭預測的目數 Q 值。這是針對該位置落子的預期目數估計。
+5. *Long-term Optimistic Policy (4)*: 長期樂觀策略。
+6. *Short-term Optimistic Policy (5)*: 短期樂觀策略。
+7. *Q-value Win/Loss (6)*: (Version > 15) 策略頭預測的勝率 Q 值 (pre-tanh)。
+8. *Q-value Score (7)*: (Version > 15) 策略頭預測的目數 Q 值。
 
 *** 輸出形狀 (Output Shape)
 輸出經過處理後，會將棋盤上的點與 Pass (虛手) 結合。
@@ -92,19 +105,18 @@
 - Pass 部分：=(Batch, Channels, 1)=
 - 最終輸出：=(Batch, Channels, Height * Width + 1)=
 
-其中：
-- *Batch*: 批次大小 (Batch Size)，即一次同時處理的棋局數量。
-- *Channels*: 上述的 8 個通道。
-- *Height * Width + 1*: 棋盤上的所有點加上一個虛手位置。
-
 ** Value Head (價值頭)
 價值頭定義於 =train/model_pytorch.py= 中的 =ValueHead= 類別。
 它不僅預測勝率，還預測多種輔助目標以幫助訓練。
 
+*** 與全域池化的關係
+- Value Head **包含** Global Pooling。
+- 因為 Value 需要輸出單一數值 (如勝率)，它必須將 $19 \times 19$ 的空間資訊壓縮。
+- 流程通常是：Trunk Output $\to$ Value Head Convs $\to$ **Global Pooling (Average/Max)** $\to$ Fully Connected Layers $\to$ Win Rate。
+
 *** 主要預測 (Main Predictions)
-- *勝率 (Value)*: 預測勝 (Win)、敗 (Loss)、無結果 (NoResult) 的機率 (=out_value=)。這是一個長度為 3 的向量。
+- *勝率 (Value)*: 預測勝 (Win)、敗 (Loss)、無結果 (NoResult) 的機率 (=out_value=)。
 - *目數分佈 (Score Belief)*: 預測最終目數差的完整機率分佈 (PDF) (=out_scorebelief_logprobs=)。
-  - 這不是單一數值，而是一個離散的分佈向量（例如長度約 400-800，取決於棋盤大小），每個元素代表最終目數差為特定整數值的機率（對數機率）。
 
 *** 統計量預測 (Statistical Predictions)
 來自 =out_miscvalue= 和 =out_moremiscvalue=：
@@ -112,8 +124,8 @@
 - *Score Stdev*: 目數差的標準差。
 - *Lead*: 當前領先目數。
 - *Variance Time*: 與遊戲複雜度或剩餘長度相關的變異數時間。
-- *TD Values*: 時間差分 (Temporal Difference) 預測，涵蓋長期、中期、短期的勝率與目數。
-- *Error Predictions*: 短期勝率與目數的誤差預測 (=shortterm_value_error=, =shortterm_score_error=)。
+- *TD Values*: 時間差分 (Temporal Difference) 預測。
+- *Error Predictions*: 短期勝率與目數的誤差預測。
 
 *** 空間特徵預測 (Spatial Predictions)
 這些預測輸出為棋盤大小的特徵圖：
@@ -128,72 +140,38 @@
 - 這是一個卷積層 (=Conv2d=)，輸出通道數為 1，用於預測棋盤上每個點的歸屬。
 - 在 =ValueHead.forward= 中，輸出為 =out_ownership = self.conv_ownership(outv1) * mask=。
 
-** 架構釋疑 (Architecture Q&A)
+* SAE 訓練策略 (SAE Training Strategy)
+基於上述架構分析，若要訓練 Sparse Autoencoder (SAE) 以解釋 KataGo 的內部概念，建議提取以下資訊：
 
-*** ValueHead 的預測內容
-ValueHead 確實預測了最終目數差的統計量。在 =train/model_pytorch.py= 的 =ValueHead= 類別與 =Model.postprocess_single_heads_output= 中可以看到：
-- =pred_scoremean=: 目數差的平均值 (來自 =out_miscvalue[:, 0]=)。
-- =pred_scorestdev=: 目數差的標準差 (來自 =out_miscvalue[:, 1]=)。
-- =pred_lead=: 當前領先目數 (來自 =out_miscvalue[:, 2]=)。
-- =out_scorebelief_logprobs=: 目數差的完整機率分佈 (Categorical distribution)。
+** 1. 提取目標 (Extraction Targets)
+SAE 應針對模型的 *殘差流 (Residual Stream)* 進行訓練。
 
-**** Logprobs (Score Belief)
-- *定義*: 這不是無限維度的物件。這是一個離散的機率分佈向量，代表最終目數差 (Score Difference) 的預測。
-- *維度*: 長度約為 `2 * (361 + 60)` (對於 19路棋盤)，涵蓋了從大敗到大勝的所有可能目數差整數值。
-- *訓練*:
-  - 目標 (`target`): 來自 MCTS 搜索樹中各個葉子節點的目數統計，或是最終遊戲結果的平滑分佈。
-  - 損失函數: 同時使用 PDF (機率密度) 的交叉熵損失 (`loss_scorebelief_pdf`) 和 CDF (累積分布) 的均方差損失 (`loss_scorebelief_cdf`)。這讓模型能學習到分佈的形狀與集中趨勢。
-- *呈現*: 輸出為 `log_softmax` 後的結果，即每個可能目數差的對數機率。
+*** 主幹殘差流 (Trunk Residual Stream)
+- *位置*: =train/model_pytorch.py= 中 =Model.forward= 的 =self.blocks= 迴圈。
+- *張量形狀*: $(Batch, 512, 19, 19)$。
+- *建議層數*:
+  - 雖然有 28 個區塊，但建議優先提取 **最後一個區塊 (Block 27)** 的輸出。這是 Trunk 的最終輸出，包含了模型認為對判斷局勢最重要的所有特徵，且是 Policy 和 Value Head 的共同輸入。
+  - 若資源允許，可增加中間層 (如 Block 13) 進行對比。
+- *數據處理 (Reshape)*:
+  - 建議採用 **Spatial SAE** 策略：將每個棋盤位置 $(x, y)$ 視為一個獨立的樣本。
+  - 將數據 Reshape 為 $(Batch \times 361, 512)$。
+  - 優點：數據量極大，能學到位置無關的通用幾何概念 (如 "小飛"、"虎")。
 
-*** __init__, forward, backward
-- =__init__=: 定義網路的「組件」或「層」(Layers)，例如卷積層 (=Conv2d=)、全連接層 (=Linear=)。這裡決定了參數空間和形狀 (輸入/輸出通道數)，但尚未定義它們如何連接。
-- =forward=: 定義數據的「流向」或「拓撲結構」。這裡決定了張量如何通過上述組件，包括殘差連接 (=x + out=)、分支 (Heads) 以及形狀變換。
-**** backward
-- PyTorch 使用 *自動微分 (Automatic Differentiation / Autograd)* 機制。
-- 當你在 =forward= 中使用 PyTorch 的張量運算 (如加法、乘法、卷積) 時，PyTorch 會自動建立計算圖 (Computational Graph)。
-- =backward= 方法會根據這個計算圖和微積分的連鎖律 (Chain Rule) 自動生成，因此開發者通常不需要手動撰寫 =backward=。
-- 唯一例外是像 =train/model_pytorch.py= 中的 =SoftPlusWithGradientFloorFunction=，這是一個自定義的 Autograd 函數，所以必須手動實作 =forward= 和 =backward= 來定義其特殊的梯度行為。
+*** 全域池化層 (Global Pooling Layer)
+- *位置*: =train/model_pytorch.py= 中 =Model.forward= 的 =self.linear_global= 之前的輸入，或是 =gpool= 的輸出。
+- *意義*: 這裡匯聚了全盤資訊，適合尋找 "黑方優勢"、"劫爭狀態"、"進入收官" 等全域概念。
 
-*** 連接資訊範例 (Connection Info Example)
-連接資訊確實位於 =Model.forward= 中。
-- *範例*: 在 =train/model_pytorch.py= 的 =Model.forward= 方法中：
-  #+BEGIN_SRC python
-  x_spatial = self.conv_spatial(input_spatial)
-  x_global = self.linear_global(input_global).unsqueeze(-1).unsqueeze(-1)
-  out = x_spatial + x_global
-  #+END_SRC
-  這段程式碼明確定義了 =input_spatial= 通過 =conv_spatial=，=input_global= 通過 =linear_global=，然後兩者的結果被 *相加* (=+=)。這就是定義網路拓撲結構（連接方式）的地方。
+** 2. 驗證與解釋 (Validation & Interpretation)
+利用 KataGo 豐富的 Head 輸出作為 "Ground Truth" 來解釋 SAE 發現的特徵 (Features)。
 
-**** 什麼是層 (What is a Layer?)
-- *定義*: 層可以被視為一個 *映射 (Map)*，它將一個向量空間（輸入）變換到另一個向量空間（輸出）。
-- *向量空間*: 層的定義（如 =in_channels=, =out_channels=）隱式地定義了它所連接的輸入和輸出向量空間的維度。
-- *實例*: 例如 =nn.Linear(19, 512)= 定義了一個從 19 維空間到 512 維空間的線性變換。
+*** 領地歸屬 (Ownership)
+- *來源*: =ValueHead= 的 =out_ownership=。
+- *方法*: 計算 SAE 特徵激活與 Ownership 預測的相關性。例如，某個特徵激活時，是否總是預測左上角為黑地？
 
-**** 向量空間運算與複合 (Vector Space Operations & Composition)
-- *加法運算 (+)*:
-  - 在 =Model.forward= 中的 =out = x_spatial + x_global=，這裡的 =+= 是 **向量分量和 (Vector Entry Sum)** (配合廣播 Broadcasting)，而非向量空間直和 (Direct Sum)。
-  - =x_spatial= 是 $(N, C, H, W)$，=x_global= 是 $(N, C, 1, 1)$。
-  - 運算時，=x_global= 被複製擴展到每個空間位置 $(h, w)$，然後與該位置的 =x_spatial= 向量進行元素相加。這在幾何上相當於將全域資訊平移到每個局部特徵上。
+*** 策略與價值 (Policy & Value)
+- *來源*: =PolicyHead= 的輸出與 =ValueHead= 的 =out_value=。
+- *方法*: 觀察當某個 SAE 特徵高激活時，Policy 是否傾向於下在特定位置，或者勝率評估是否發生劇烈變化。
 
-- *線性映射複合 (Linear Map Composition)*:
-  - 每一層 (Layer) 都是一個映射 $T: U \to V$。
-  - 程式碼中的連續呼叫即為映射的複合 (Composition)。
-  - *範例*: 在 =train/model_pytorch.py= 的 =ResBlock.forward= 方法中：
-    #+BEGIN_SRC python
-    out = self.normactconv1(out, ...)  # 映射 f: U -> V
-    out = self.normactconv2(out, ...)  # 映射 g: V -> W
-    # 此處 out 變成了 g(f(x))
-    #+END_SRC
-  - 這裡 =normactconv1= 和 =normactconv2= 都是包含卷積 (線性映射) 和非線性激活函數的複合函數。
-
-**** ResBlock 詳解 (ResBlock Details)
-在 =train/model_pytorch.py= 的 =ResBlock.forward= 中：
-#+BEGIN_SRC python
-out = self.normactconv1(out, ...)
-#+END_SRC
-- *normactconv1* 是一個 =NormActConv= 類別的實例。
-- 它代表了殘差區塊中的前半部分運算。
-- *運算順序*: 根據 Pre-activation ResNet 設計，它依序執行：
-  1. *Normalization* (=NormMask=): 如 Batch Norm 或 Fixup。
-  2. *Activation* (=act=): 如 ReLU, Mish。
-  3. *Convolution* (=Conv2d= 或 =KataConvAndGPool=): 線性映射，通常包含降維或特徵提取。
+*** 輔助目標 (Auxiliary Targets)
+- *來源*: =ValueHead= 的 =out_miscvalue= (Lead, Score Mean)。
+- *方法*: 尋找與 "領先目數" 高度相關的特徵，這可能代表了模型的 "點目" 能力。
