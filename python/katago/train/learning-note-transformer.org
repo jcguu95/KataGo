@@ -1,0 +1,57 @@
+#+TITLE: Transformer 架構 KataGo 訓練程式碼分析
+
+* 概述 (Overview)
+此目錄包含使用 Transformer 架構而非標準 ResNet/CNN 方法來訓練 KataGo 模型的實
+驗性/非官方實作。它將現代 LLM 技術（RoPE, SwiGLU, RMSNorm）整合到 KataGo 的策
+略/價值網路框架中。
+
+* 關鍵架構變更 (Key Architectural Changes)
+** Transformer 區塊 (Transformer Blocks)
+核心邏輯位於 ~train_transformer_katago/model_pytorch.py~。
+它實作了 ~TransformerRoPEGQABlock~ 來取代標準的殘差區塊 (Residual Blocks)。
+*** RoPE (旋轉位置編碼)
+使用 2D RoPE (~precompute_freqs_cos_sin_2d~) 來處理圍棋棋盤的空間網格，這至關重
+要，因為 Transformer 預設具有排列不變性 (permutation-invariant)。
+*** SwiGLU
+在前饋神經網路中使用 SwiGLU 激活函數，這是現代 LLM（如 LLaMA/PaLM）中常見的改進。
+*** RMSNorm
+取代 LayerNorm，這是現代 Transformer 中的另一個標準優化。
+*** GQA (分組查詢注意力)
+程式碼支援 GQA，雖然 README 指出它預設可能被禁用或是實驗性的。
+
+** 模型配置 (Model Configs)
+
+~train_transformer_katago/modelconfigs.py~ 定義了幾個 Transformer 特定的配置（例
+如 ~b14c192h6tfrs~).
+
+- ~tfrs~ 後綴可能代表 Transformer + RoPE + SwiGLU。
+- 配置指定了 ~transformer_heads~, ~transformer_ffn_channels~ 等。
+
+* 優化器：Muon (Optimization: Muon)
+訓練迴圈使用一個名為 Muon 的自定義優化器
+(~train_transformer_katago/muon_kissin.py~)，改編自 "Moonlight" 專案。
+- 它使用 Newton-Schulz 迭代進行正交化 (~zeropower_via_newtonschulz5~)。
+- 它根據參數的形狀（2D 與更大）和名稱（例如跳過嵌入/輸出層）以不同方式處理參數。
+- 它與輔助的 Adam 優化器結合使用 (~MuonWithAuxAdamKimi~)。
+
+* 訓練流程 (Training Pipeline) - (~train_muon_ki.py~)
+- 多 GPU (Multi-GPU)：支援 DistributedDataParallel (DDP)。
+- FP16/AMP：支援混合精度訓練。
+- SWA (隨機權重平均)：大量用於提高泛化能力。
+- 資料載入 (Data Loading)：讀取打亂後的 ~.npz~ 檔案（標準 KataGo 格式）。
+- Lookahead Optimizer：可選支援 Lookahead 包裝器。
+
+* 匯出與推論 (Export & Inference)
+- ONNX 匯出：提供了 ~export_onnx.py~ 用於將訓練好的 PyTorch 檢查點轉換為
+  ONNX。這包括量化支援 (INT8) 和元數據注入。
+- 傳統匯出： ~export_model_pytorch.py~ 用於匯出為標準 KataGo `.bin` 格式，
+  但 README 建議 Transformer 模型主要用於透過修改後的 KataGo 引擎 ("KataGomo")
+  使用 ONNX。
+
+* 有趣的觀察 (Interesting Observations)
+- 歷史矩陣 (History Matrices)： ~data_processing_pytorch.py~ 中有特定的 "歷史矩
+  陣" 邏輯，似乎用於處理與先前步數或棋盤狀態相關的輸入特徵，這是圍棋特有的。
+- 對稱性 (Symmetry)：程式碼在訓練資料增強期間處理圍棋的 8 倍對稱性（旋轉/
+  反射）。
+- QAT (量化感知訓練)：有輔助程式 (~qat_helper.py~) 用於 TensorRT 相容的 INT8
+  量化，顯示其專注於高效能推論。
