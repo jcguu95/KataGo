@@ -231,8 +231,15 @@
 ** 5. 輸出頭 (Output Heads)
 - 原始版: 策略頭 (~PolicyHead~) 與價值頭 (~ValueHead~) 的邏輯相對標準。
 - Transformer 版:
-  - ~PolicyHead~ 的輸出處理中，對於 Mask 外部區域的處理邏輯增加了常數張量優化 (~self.t_1~, ~self.t_5000~)，以利於 TensorRT INT8 轉換。
-  - 雖然結構相似，但 Transformer 版在許多運算細節上（如常數宣告為 buffer）都為了硬體部署做了微調。
+  - ~PolicyHead~ 的輸出處理中，對於 Mask 外部區域的處理邏輯增加了常數張量優化
+    (~self.t_1~, ~self.t_5000~)，以利於 TensorRT INT8 轉換。
+  - 雖然結構相似，但 Transformer 版在許多運算細節上（如常數宣告為 buffer）都為
+    了硬體部署做了微調。
+  - **重要**: 即使主幹 (Trunk) 使用了 Transformer Block，策略頭 (~PolicyHead~) 和
+    價值頭 (~ValueHead~) 仍然保持傳統的 CNN/MLP 結構。它們主要由 ~Conv2d~ (通常是
+    1x1)、~Linear~ 全連接層以及全域池化 (~KataGPool~) 組成，並不包含 Attention
+    機制。這意味著 Transformer 負責提取特徵，而最後的決策輸出仍然依賴於卷積和
+    全連接層的解碼。
 
 * 檔案摘要 (File Synopses)
 本節列出專案中各檔案的功能摘要。
@@ -327,9 +334,9 @@ param b28c512nbt, I don't have a Muon-trained b28 control group. It’s possible
 that a b28 retrained with Muon might not lag that far behind.
 #+end_quote
 
-** 模型配置詳解 (Model Configuration Details)
+** 模型配置詳解 
 
-*** 術語 (Terminology)
+*** 術語 
 - **Layers (層數)**: 模型中堆疊的 Transformer 區塊數量。在此架構中，「層」與「區
   塊」可互換使用；例如，一個 18 層的模型包含 18 個順序排列的 Transformer 區塊。
 - **Trunk Channels (主幹通道數)**: 棋盤上每個位置的隱藏向量表示大小 (嵌入維度)。
@@ -356,6 +363,17 @@ that a b28 retrained with Muon might not lag that far behind.
 - **FFN Channels**: 256
 - **Features**: RoPE, SwiGLU
 
+**** Parameter Estimation
+- **Embedding / Input**: ~22 channels (input) -> 96 channels (trunk) 3x3 conv ~ 22*96*9 = 19k.
+- **Per Block**:
+  - Attention: $4 \times 96 \times 96$ (Q, K, V, Out projections) $\approx 36k$
+  - FFN (SwiGLU): 3 linear layers (Gate, In, Out). Gate/In: $96 \times 256$, Out:
+    $256 \times 96$. Total $3 \times 96 \times 256 \approx 73k$
+  - Total per block $\approx 110k$
+- **Total Body**: $11 \times 110k \approx 1.21M$
+- **Heads**: Policy and Value heads add small overhead (~0.1M).
+- **Sum**: $\approx 1.3M$.
+
 *** b14c192h6tfrs (6M params)
 - **Layers**: 14 blocks (`transformerropesg`)
 - **Trunk Channels**: 192
@@ -364,6 +382,14 @@ that a b28 retrained with Muon might not lag that far behind.
 - **FFN Channels**: 512
 - **Features**: RoPE, SwiGLU
 
+**** Parameter Estimation
+- **Per Block**:
+  - Attention: $4 \times 192^2 \approx 147k$
+  - FFN (SwiGLU): $3 \times 192 \times 512 \approx 295k$
+  - Total per block $\approx 442k$
+- **Total Body**: $14 \times 442k \approx 6.2M$
+- **Sum**: Consistent with ~6M estimate.
+
 *** b18c384h12tfrs (35M params)
 - **Layers**: 18 blocks (`transformerropesg`)
 - **Trunk Channels**: 384
@@ -371,4 +397,14 @@ that a b28 retrained with Muon might not lag that far behind.
 - **KV Heads**: 12
 - **FFN Channels**: 1024
 - **Features**: RoPE, SwiGLU
+
+**** Parameter Estimation
+- **Per Block**:
+  - Attention: $4 \times 384^2 \approx 590k$
+  - FFN (SwiGLU): $3 \times 384 \times 1024 \approx 1.18M$
+  - Total per block $\approx 1.77M$
+- **Total Body**: $18 \times 1.77M \approx 31.8M$
+- **Heads**: Larger Policy/Value heads due to larger trunk channel size ($384 \to
+  \text{outputs}$), contributing significantly (~2-3M).
+- **Sum**: $\approx 34-35M$.
 
