@@ -71,7 +71,7 @@
   - ~out_miscvalue~: 分數均值、標準差、領先目數等。
   - ~out_scorebelief_logprobs~: 預期分數差異的詳細分佈。
   - 輔助空間輸出: 領地歸屬 (~ownership~)、目數預測 (~scoring~) 等。
-* 優化器：Muon (Optimization: Muon)
+* 優化器：Muon 
 訓練迴圈使用一個名為 Muon 的自定義優化器
 (~train_transformer_katago/muon_kissin.py~)，改編自 "Moonlight" 專案。
 - 機制：Muon 是一種動量 SGD 優化器，但它不直接更新權重，而是將權重矩陣投影到正交群上。
@@ -89,6 +89,66 @@
 - 它與輔助的 Adam 優化器結合使用 (~MuonWithAuxAdamKimi~)，通常 Muon 負責主要的
   Transformer 矩陣（如 Attention 和 FFN），而 Adam 負責 Embedding 和
   Normalization 層。
+
+* Transformer Block 詳解 (Transformer Block Details)
+本節深入分析 ~train_transformer_katago/model_pytorch.py~ 中定義的 Transformer 區
+塊，特別是 ~TransformerRoPEGQABlock~ 。
+** 1. 結構與層數 (Structure & Layers)
+在程式碼中，一個 ~TransformerRoPEGQABlock~ 類別實例代表 Transformer 架構中的一層 (One Layer)。
+每個 Block 包含兩個主要的子層 (Sub-layers)：
+1. Attention Sub-layer: 包含 RMSNorm, Q/K/V 投影, RoPE 旋轉, Attention 計算
+   (SDPA), 以及輸出投影。
+2. Feed-Forward Sub-layer (FFN): 包含 RMSNorm, SwiGLU (或是標準 Activation),
+   以及線性層。
+
+雖然類別名為 "Block"，但從架構深度來看，它對應的是 Transformer 的一層。模型的
+總深度由配置檔 (~modelconfigs.py~) 中的 ~block_kind~ 列表長度決定。如果列表中有 6
+個 ~'transformersg'~, 模型就會堆疊 6 層這樣的 Block。
+
+** 2. 關鍵組件與維度 (Components & Sizes)
+假設配置中的主幹通道數為 ~c_main~ (例如 256)，頭數為 ~num_heads~ (例如 8)。
+
+- Q/K/V 投影 (Projections):
+  程式碼明確定義了三個線性層來生成 Query, Key, Value：
+  #+BEGIN_SRC python
+  self.q_proj = torch.nn.Linear(c_main, c_main, bias=False)
+  self.k_proj = torch.nn.Linear(c_main, self.num_kv_heads * self.head_dim, bias=False)
+  self.v_proj = torch.nn.Linear(c_main, self.num_kv_heads * self.head_dim, bias=False)
+  #+END_SRC
+  - ~q_proj~: 輸出維度保持 ~c_main~ 。
+  - ~k_proj~ / ~v_proj~: 為了支援 GQA (Grouped Query Attention)，輸出維度較小。如果是標準 MHA，則與 Q 相同。
+  - ~head_dim~ (每個頭的維度) = ~c_main // num_heads~ (例如 256/8 = 32)。
+
+- RoPE (旋轉位置編碼):
+  - 應用於 Query 和 Key。
+  - 程式碼： ~q, k = apply_rotary_emb(q, k, self.cos_cached, self.sin_cached)~
+  - 這是將棋盤的 2D 空間資訊注入到 Transformer 的關鍵步驟，否則 Attention 機制無法區分棋盤上的位置。
+
+- FFN (前饋網路):
+  - 維度 (~ffn_dim~) 通常定義為 ~c_main * 2~ (在 ~modelconfigs.py~ 中可配置)。
+  - 結構 (若啟用 SwiGLU):
+    $FFN(x) = (SiLU(xW_1) \otimes xW_{gate})W_2$
+    程式碼對應：
+    #+BEGIN_SRC python
+    x1 = self.ffn_linear1(xn)      # W1
+    x_gate = self.ffn_linear_gate(xn) # W_gate
+    x1 = self.ffn_act(x1) * x_gate # SiLU(W1) * W_gate
+    x1 = self.ffn_linear2(x1)      # W2
+    #+END_SRC
+
+** 3. 運作流程 (Workflow)
+輸入 x 形狀為 (B, C, H, W) = (Batch, Channel, Height, Width)。
+1. Reshape: 轉換為序列格式 (B, S, C)，其中 S = H \times W。
+2. Pre-Norm: 使用 ~RMSNorm~ 進行歸一化。
+3. Q/K/V 生成: 通過上述線性層。
+4. RoPE: 對 Q, K 進行旋轉。
+5. GQA Expand: 如果使用 GQA，將 K, V 擴展以匹配 Q 的頭數 (為了相容 PyTorch 的 ~scaled_dot_product_attention~)。
+6. Attention: 計算 $\text{Softmax}(\frac{QK^T}{\sqrt{d}})V$。
+7. Residual 1: $x = x + \text{AttentionOutput}$。
+8. Pre-Norm: 再次 ~RMSNorm~ 。
+9. FFN: 通過 SwiGLU 網路。
+10. Residual 2: $x = x + \text{FFNOutput}$。
+11. Reshape Back: 轉回 (B, C, H, W) 以供後續層或 CNN 輸出頭使用。
 
 * 訓練流程 (Training Pipeline) - (~train_muon_ki.py~)
 - 多 GPU (Multi-GPU)：支援 DistributedDataParallel (DDP)。
