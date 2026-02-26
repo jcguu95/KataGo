@@ -165,3 +165,41 @@
 - QAT (量化感知訓練)：有輔助程式 (~qat_helper.py~) 用於 TensorRT 相容的 INT8
   量化，顯示其專注於高效能推論。
 
+* 原始 KataGo 與 Transformer 版差異對照 
+以下比較原始實作 (~model_pytorch.py~) 與 Transformer 變體
+(~train_transformer_katago/model_pytorch.py~) 的關鍵差異：
+
+** 1. 核心架構 (Core Architecture)
+- 原始版: 純粹的 ResNet 架構。依賴 ~ResBlock~, ~BottleneckResBlock~ (以及巢狀變體)
+  進行特徵提取。所有運算皆基於卷積神經網路 (CNN)。
+- Transformer 版: 混合架構。除了保留 ResNet 區塊外，新增了 ~TransformerBlock~ 與
+  ~TransformerRoPEGQABlock~ 。
+  - 引入了 Self-Attention 機制處理棋盤特徵。
+  - 支援 RoPE (Rotary Positional Embeddings)：專為 2D 棋盤設計的旋轉位置編碼，
+    取代相對/絕對位置編碼。
+  - 支援 GQA (Grouped Query Attention)：優化 Attention 的運算效率。
+  - 支援 SwiGLU：在 FFN (Feed-Forward Network) 中使用 SwiGLU 激活函數取代標準 ReLU/GELU。
+
+** 2. 正規化層 (Normalization)
+- 原始版: 主要使用 ~NormMask~ 類別封裝 Batch Normalization (~bnorm~) 或各種 Fixup 初始化變體。
+- Transformer 版:
+  - 在 Transformer 區塊中引入了 ~RMSNorm~ (Root Mean Square Normalization)，這在 LLM 訓練中比 LayerNorm 更穩定且高效。
+  - 保留了 ~NormMask~ 用於 CNN 部分，但增加了針對 INT8 量化訓練 (QAT) 的支援 (~MAYBE_QAT~ 標記)。
+
+** 3. 激活函數 (Activation Functions)
+- 原始版: 支援 ReLU, ELU, Mish, GELU, Hardswish。
+- Transformer 版: 新增支援 SiLU (Sigmoid Linear Unit, 即 Swish)，這是 SwiGLU 的核心組成部分。
+
+** 4. 量化與優化支援 (Quantization & Optimization)
+- 原始版: 較少顯式的量化代碼。
+- Transformer 版:
+  - QAT 支援: 程式碼中包含大量 ~QuantStub~ 與 ~MAYBE_QAT~ 邏輯，明確針對 TensorRT 的 INT8 推論進行優化。
+  - Torch Dynamo: 引入 ~torch._dynamo~ 進行編譯優化。
+  - PyTorch 版本檢查: 強制要求較新的 PyTorch 版本 (2.7+ ? 程式碼中註解提及)，以避開舊版 NaN 問題。
+
+** 5. 輸出頭 (Output Heads)
+- 原始版: 策略頭 (~PolicyHead~) 與價值頭 (~ValueHead~) 的邏輯相對標準。
+- Transformer 版:
+  - ~PolicyHead~ 的輸出處理中，對於 Mask 外部區域的處理邏輯增加了常數張量優化 (~self.t_1~, ~self.t_5000~)，以利於 TensorRT INT8 轉換。
+  - 雖然結構相似，但 Transformer 版在許多運算細節上（如常數宣告為 buffer）都為了硬體部署做了微調。
+
