@@ -4,7 +4,6 @@
 此目錄包含使用 Transformer 架構而非標準 ResNet/CNN 方法來訓練 KataGo 模型的實
 驗性/非官方實作。它將現代 LLM 技術（RoPE, SwiGLU, RMSNorm）整合到 KataGo 的策
 略/價值網路框架中。
-
 * 關鍵架構變更 (Key Architectural Changes)
 ** Transformer 區塊 (Transformer Blocks)
 核心邏輯位於 ~train_transformer_katago/model_pytorch.py~。
@@ -60,6 +59,53 @@
 - ~tfrs~ 後綴可能代表 Transformer + RoPE + SwiGLU。
 - 配置指定了 ~transformer_heads~, ~transformer_ffn_channels~ 等。
 
+* 模型架構分析 (Model Architecture Analysis)
+基於 ~train_transformer_katago/model_pytorch.py~ 中的 ~class Model~ 分析，這是一
+個針對圍棋設計的多輸入、多輸出 ResNet/Transformer 混合架構。
+** 1. 輸入層 (Inputs)
+模型接受三個主要輸入：
+- ~input_spatial~ (Batch, InputChannels, Height, Width): 代表棋盤狀態的空間特徵。
+- ~input_global~ (Batch, GlobalFeatures): 代表全局遊戲狀態資訊。
+- ~input_meta~ (Optional): 可選的元數據張量。
+
+** 2. 主幹網路 (Trunk / Body)
+負責將輸入處理為通用表示，然後分流到各個 Head。
+- 嵌入與融合:
+  - ~conv_spatial~: 使用 1x1 或 3x3 卷積處理空間輸入。
+  - ~linear_global~: 線性投影全局輸入。
+  - 兩者相加融合 (~out = x_spatial + x_global~)。
+- 區塊堆疊 (Blocks):
+  - 由配置中的 ~block_kind~ 定義一系列區塊。
+  - 支援標準 ~ResBlock~, 瓶頸層 ~BottleneckResBlock~, 以及各種 Transformer 變體 (~TransformerRoPEGQABlock~ 等)。
+  - 這些 Transformer 區塊整合了 RoPE (旋轉位置編碼)、GQA (分組查詢注意力) 和 SwiGLU 等技術。
+
+** 3. 中間 Head (Intermediate Head) - 可選
+如果配置啟用 (~has_intermediate_head~)，在主幹網路的中段會分出一條支路。
+- 經過標準化 (~norm_intermediate_trunkfinal~) 後，連接到獨立的策略 (~Intermediate Policy Head~) 和價值 (~Intermediate Value Head~) 輸出。
+- 這有助於深層網路的梯度傳遞和訓練穩定性。
+
+** 4. 輸出 Head (Output Heads)
+主幹輸出經標準化 (~norm_trunkfinal~) 後進入兩個主要分支：
+
+*** A. 策略 Head (Policy Head)
+- 輸入形狀: ~(B, c_trunk, H, W)~
+- **雙路徑結構**:
+  1. ~conv1p~: 1x1 卷積路徑。
+  2. ~conv1g~ -> Global Pooling (~KataGPool~) -> Linear: 全局資訊路徑。
+- **融合**: 將空間路徑與全局路徑相加。
+- **輸出**:
+  - 棋盤移動 Logits (經 ~conv2p~)。
+  - Pass (停著) Logits (經獨立線性層)。
+
+*** B. 價值 Head (Value Head)
+- 輸入形狀: ~(B, c_trunk, H, W)~
+- **處理**:
+  - ~conv1~ -> Global Pooling (~KataValueHeadGPool~) -> Linear (~linear2~)。
+- **多重輸出**:
+  - ~out_value~: 勝/負/無結果 (Win/Loss/NoResult)。
+  - ~out_miscvalue~: 分數均值、標準差、領先目數等。
+  - ~out_scorebelief_logprobs~: 預期分數差異的詳細分佈。
+  - 輔助空間輸出: 領地歸屬 (~ownership~)、目數預測 (~scoring~) 等。
 * 優化器：Muon (Optimization: Muon)
 訓練迴圈使用一個名為 Muon 的自定義優化器
 (~train_transformer_katago/muon_kissin.py~)，改編自 "Moonlight" 專案。
@@ -106,3 +152,4 @@
   反射）。
 - QAT (量化感知訓練)：有輔助程式 (~qat_helper.py~) 用於 TensorRT 相容的 INT8
   量化，顯示其專注於高效能推論。
+
