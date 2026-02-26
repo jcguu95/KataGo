@@ -302,3 +302,18 @@
 - ~train_transformer_katago/generate_empty_checkpoint.py~: 根據指定的模型配置名
   稱，生成一個未經訓練的、隨機初始化的空模型檢查點。
 
+* Transformer Model that beated the original Katago.
+
+#+ATTR_AUTHOR: hzy_sigmoid, the author of Katago Transformer
+#+ATTR_SRC: https://discord.com/channels/417022162348802048/583775968804732928/1474956183914680320
+#+begin_quote
+Based on my experiments, Transformers significantly outperform nbt at the same parameter count. I estimate that a Transformer with roughly half the parameters can match an nbt's performance. In terms of inference time, the Transformer should be slightly stronger but not by much, as a Transformer with the same parameter count takes about 1.6x longer to run than an NBT.
+
+Currently, I lack a strictly controlled study, but here are some scattered results:
+1.3M param Transformer (b11c96h3tfrs): ~12,200 Elo
+1.3M param CNN (same training method): ~12,100 Elo
+6M param (b14c192h6tfrs): ~13,300 Elo (the CNN control group was around 13,000–13,100, if I recall correctly)
+35M param (b18c384h12tfrs): The current work-in-progress is at 14,050–14,100 Elo (the one I posted a few days ago); I estimate it will reach 14,200–14,300 once training is complete.
+Although this final version should be much stronger than the official 73M param b28c512nbt, I don't have a Muon-trained b28 control group. It’s possible that a b28 retrained with Muon might not lag that far behind.
+#+end_quote
+
