@@ -235,3 +235,4 @@ SAE 應針對模型的 *殘差流 (Residual Stream)* 進行訓練。
 *** 輔助目標 (Auxiliary Targets)
 - *來源*: =ValueHead= 的 =out_miscvalue= (Lead, Score Mean)。
 - *方法*: 尋找與 "領先目數" 高度相關的特徵，這可能代表了模型的 "點目" 能力。
+
