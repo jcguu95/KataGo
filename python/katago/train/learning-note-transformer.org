@@ -4,54 +4,7 @@
 此目錄包含使用 Transformer 架構而非標準 ResNet/CNN 方法來訓練 KataGo 模型的實
 驗性/非官方實作。它將現代 LLM 技術（RoPE, SwiGLU, RMSNorm）整合到 KataGo 的策
 略/價值網路框架中。
-* 關鍵架構變更 (Key Architectural Changes)
-** Transformer 區塊 (Transformer Blocks)
-核心邏輯位於 ~train_transformer_katago/model_pytorch.py~。
-它實作了 ~TransformerRoPEGQABlock~ 來取代標準的殘差區塊 (Residual Blocks)。
-*** RoPE (旋轉位置編碼)
-使用 2D RoPE (~precompute_freqs_cos_sin_2d~) 來處理圍棋棋盤的空間網格。
-- 原理：RoPE 通過將查詢 (Query) 和鍵 (Key) 向量旋轉一個角度來編碼相對位置訊息。
-  具體來說，它將嵌入向量中的特徵成對分組，並視為複平面上的點。對於位置 $m$ 和頻率 $\theta$，
-  它透過乘以 $e^{i m \theta}$ 進行旋轉：
-  
-  $f_{q,k}(x_m, m) = (x_m + i y_m) e^{i m \theta} = (x_m \cos(m\theta) - y_m \sin(m\theta)) + i(x_m \sin(m\theta) + y_m \cos(m\theta))$
-
-  對於圍棋這種 2D 網格，它將 x 和 y 軸的頻率分開計算，將一半的特徵用於編碼 X
-  坐標，另一半用於編碼 Y 坐標，使得模型能夠感知棋子之間的相對歐幾里得距離和方
-  向。
-- 優勢：相比於絕對位置編碼 (Absolute PE)，RoPE 對於序列長度（棋盤大小）的泛化
-  能力更好，且能保留平移不變性 (translation invariance) 的特性，這對於理解局部
-  棋形非常重要。
-
-*** SwiGLU
-在前饋神經網路 (FFN) 中使用 SwiGLU 激活函數。
-- 公式：SwiGLU(x) = Swish(xW) \cdot (xV)，其中 Swish(z) = z \cdot sigmoid(z)。
-- 結構：標準 Transformer 的 FFN 通常是兩個線性層中間夾一個 ReLU/GELU。SwiGLU
-  則使用了三個線性映射（Gate, Value, Output），雖然增加了參數量，但在相同的計
-  算預算下通常能提供更好的收斂性和性能。
-- 來源：這是現代 LLM（如 LLaMA, PaLM）中常見的架構改進。
-
-*** RMSNorm
-取代 LayerNorm (Layer Normalization)。
-- 差異：RMSNorm (Root Mean Square Normalization) 省略了 LayerNorm 中的均值中心
-  化 (mean centering) 步驟，僅根據均方根進行縮放。
-- 公式：
-  $\bar{a}_i = \frac{a_i}{\text{RMS}(a)} g_i, \quad \text{where } \text{RMS}(a)
-             = \sqrt{\frac{1}{n} \sum_{i=1}^{n} a_i^2}$
-  其中 $g_i$ 是可學習的縮放參數。
-- 優勢：計算上更簡潔高效，且在實驗中發現對於深層 Transformer 的訓練穩定性有幫
-  助。它讓梯度在反向傳播時更穩定，減少了梯度消失或爆炸的風險。
-
-*** GQA (分組查詢注意力)
-程式碼支援 GQA (Grouped Query Attention)。
-- 機制：介於 MHA (Multi-Head Attention) 和 MQA (Multi-Query Attention) 之間。
-  MHA 每個 Query Head 都有對應的 Key/Value Head；MQA 所有 Query Head 共用一組
-  Key/Value Head。GQA 則是將 Query Heads 分組，每組共用一個 Key/Value Head。
-- 目的：大幅減少 KV Cache 的大小（雖然在圍棋這種固定長度的場景下，主要優勢是減
-  少參數和推理時的記憶體頻寬需求），同時保持比 MQA 更好的模型表現。
-- 現狀：README 指出它在此實作中可能被禁用或是實驗性的，視具體配置而定。
-
-** 模型配置 (Model Configs)
+* 模型配置 (Model Configs)
 
 ~train_transformer_katago/modelconfigs.py~ 定義了幾個 Transformer 特定的配置（例
 如 ~b14c192h6tfrs~).
@@ -165,30 +118,48 @@
 - QAT (量化感知訓練)：有輔助程式 (~qat_helper.py~) 用於 TensorRT 相容的 INT8
   量化，顯示其專注於高效能推論。
 
-* 原始 KataGo 與 Transformer 版差異對照 
-以下比較原始實作 (~model_pytorch.py~) 與 Transformer 變體
-(~train_transformer_katago/model_pytorch.py~) 的關鍵差異：
+* 原始 KataGo 與 Transformer 版架構差異詳解
+此章節詳細比較原始實作 (~model_pytorch.py~) 與 Transformer 變體
+(~train_transformer_katago/model_pytorch.py~) 的關鍵差異，並整合了新引入技術的
+背景知識。
 
-** 1. 核心架構 (Core Architecture)
-- 原始版: 純粹的 ResNet 架構。依賴 ~ResBlock~, ~BottleneckResBlock~ (以及巢狀變體)
-  進行特徵提取。所有運算皆基於卷積神經網路 (CNN)。
-- Transformer 版: 混合架構。除了保留 ResNet 區塊外，新增了 ~TransformerBlock~ 與
-  ~TransformerRoPEGQABlock~ 。
-  - 引入了 Self-Attention 機制處理棋盤特徵。
-  - 支援 RoPE (Rotary Positional Embeddings)：專為 2D 棋盤設計的旋轉位置編碼，
-    取代相對/絕對位置編碼。
-  - 支援 GQA (Grouped Query Attention)：優化 Attention 的運算效率。
-  - 支援 SwiGLU：在 FFN (Feed-Forward Network) 中使用 SwiGLU 激活函數取代標準 ReLU/GELU。
+** 1. 核心區塊：ResNet vs Transformer (Core Blocks)
+- **原始版**: 純粹的 ResNet 架構。
+  - 依賴 ~ResBlock~, ~BottleneckResBlock~ (以及巢狀變體) 進行特徵提取。
+  - 所有運算皆基於卷積神經網路 (CNN)，具有平移不變性和局部性，但缺乏全局 Attention 能力。
+
+- **Transformer 版**: 混合架構。
+  - 除了保留 ResNet 區塊外，新增了 ~TransformerBlock~ 與 ~TransformerRoPEGQABlock~。
+  - 核心變更與術語解釋：
+    - **Self-Attention**: 引入了全域注意力機制處理棋盤特徵。
+    - **RoPE (Rotary Positional Embeddings, 旋轉位置編碼)**:
+      - /程式碼/: ~precompute_freqs_cos_sin_2d~
+      - /原理/: 通過將 Query 和 Key 向量在複平面上旋轉來編碼相對位置。對於圍棋這種 2D 網格，它將 x 和 y 軸的頻率分開計算，使得模型能感知棋子間的相對距離和方向。
+      - /優勢/: 相比絕對位置編碼，RoPE 對於棋盤大小的泛化能力更好，且保留了平移不變性。
+    - **GQA (Grouped Query Attention, 分組查詢注意力)**:
+      - /機制/: 將 Query Heads 分組，每組共用一個 Key/Value Head。
+      - /優勢/: 介於 MHA (多頭注意力) 和 MQA (多查詢注意力) 之間，大幅減少 KV Cache (或參數/頻寬需求)，同時保持比 MQA 更好的表現。
+    - **SwiGLU**:
+      - /程式碼/: FFN 中使用 ~Swish(xW) * (xV)~ 結構。
+      - /差異/: 取代了標準 Transformer 中兩個線性層夾一個 ReLU/GELU 的結構。
+      - /來源/: 現代 LLM (如 LLaMA) 常見改進，能提供更好的收斂性。
 
 ** 2. 正規化層 (Normalization)
-- 原始版: 主要使用 ~NormMask~ 類別封裝 Batch Normalization (~bnorm~) 或各種 Fixup 初始化變體。
-- Transformer 版:
-  - 在 Transformer 區塊中引入了 ~RMSNorm~ (Root Mean Square Normalization)，這在 LLM 訓練中比 LayerNorm 更穩定且高效。
-  - 保留了 ~NormMask~ 用於 CNN 部分，但增加了針對 INT8 量化訓練 (QAT) 的支援 (~MAYBE_QAT~ 標記)。
+- **原始版**: 
+  - 主要使用 ~NormMask~ 類別封裝 Batch Normalization (~bnorm~) 或各種 Fixup 初始化變體。
+
+- **Transformer 版**:
+  - **RMSNorm (Root Mean Square Normalization)**:
+    - 在 Transformer 區塊中取代 LayerNorm。
+    - /原理/: 省略了 LayerNorm 的均值中心化步驟，僅根據均方根進行縮放。
+    - /優勢/: 計算更高效，且對深層網路訓練更穩定（減少梯度爆炸/消失風險）。
+  - **QAT 支援**: 保留了 ~NormMask~ 用於 CNN 部分，但增加了針對 INT8 量化訓練 (QAT) 的支援 (~MAYBE_QAT~ 標記)。
 
 ** 3. 激活函數 (Activation Functions)
-- 原始版: 支援 ReLU, ELU, Mish, GELU, Hardswish。
-- Transformer 版: 新增支援 SiLU (Sigmoid Linear Unit, 即 Swish)，這是 SwiGLU 的核心組成部分。
+- **原始版**: 支援 ReLU, ELU, Mish, GELU, Hardswish。
+- **Transformer 版**: 
+  - 新增支援 **SiLU** (Sigmoid Linear Unit, 即 Swish)。
+  - 這是 SwiGLU 架構的核心組成部分 (SwiGLU = SiLU-gated linear unit)。
 
 ** 4. 量化與優化支援 (Quantization & Optimization)
 - 原始版: 較少顯式的量化代碼。
