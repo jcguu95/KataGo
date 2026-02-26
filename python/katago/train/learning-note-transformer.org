@@ -327,25 +327,32 @@ param b28c512nbt, I don't have a Muon-trained b28 control group. It’s possible
 that a b28 retrained with Muon might not lag that far behind.
 #+end_quote
 
-** Model Configuration Details
+** 模型配置詳解 (Model Configuration Details)
 
-*** Terminology
-- **Layers**: The number of Transformer blocks stacked in the model. In this architecture, "Layer" and "Block" are used interchangeably; e.g., a model with 18 layers consists of 18 sequential Transformer blocks.
-- **Trunk Channels**: The size of the hidden vector representation (embedding dimension) for each position on the board. Often denoted as $d_{model}$.
-- **Transformer Heads**: The number of attention heads used for the Query ($Q$) in the Self-Attention mechanism. For each of the $19 \times 19 = 361$ points on the board, the model generates **Transformer Heads** distinct Query vectors.
-- **KV Heads**: The number of attention heads used for Keys ($K$) and Values ($V$). If this is smaller than **Transformer Heads**, the model uses Grouped Query Attention (GQA).
-  - *Explanation*: Instead of having a unique K and V vector for every Q head (standard Multi-Head Attention), multiple Q heads share the same K and V heads.
-  - *Example*: If Transformer Heads = 12 and KV Heads = 4, then every 3 Q heads share 1 K head and 1 V head. This significantly reduces the memory bandwidth required to load K/V pairs during inference and training.
-- **FFN Channels**: The hidden dimension size of the Feed-Forward Network (FFN) sub-layer within each Transformer block. In SwiGLU configurations, this is the size of the intermediate projection before the gating mechanism.
+*** 術語 (Terminology)
+- **Layers (層數)**: 模型中堆疊的 Transformer 區塊數量。在此架構中，「層」與「區
+  塊」可互換使用；例如，一個 18 層的模型包含 18 個順序排列的 Transformer 區塊。
+- **Trunk Channels (主幹通道數)**: 棋盤上每個位置的隱藏向量表示大小 (嵌入維度)。
+  通常記為 $d_{model}$。
+- **Transformer Heads (Transformer 頭數)**: 自注意力機制中用於查詢 ($Q$) 的注意
+  力頭數量。對於棋盤上的 $19 \times 19 = 361$ 個點，模型會生成 **Transformer Heads**
+  個不同的查詢向量。
+- **KV Heads (KV 頭數)**: 用於鍵 ($K$) 和值 ($V$) 的注意力頭數量。如果此數值小於
+  **Transformer Heads**，則模型使用分組查詢注意力 (GQA)。
+  - *解釋*: 不同於標準多頭注意力 (MHA) 中每個 Q 頭都有唯一的 K 和 V 向量，GQA 中
+    多個 Q 頭共用相同的 K 和 V 頭。
+  - *範例*: 如果 Transformer Heads = 12 且 KV Heads = 4，則每 3 個 Q 頭共用 1 個
+    K 頭和 1 個 V 頭。這顯著降低了推論和訓練期間載入 K/V 對所需的記憶體頻寬。
+- **FFN Channels (FFN 通道數)**: 每個 Transformer 區塊內前饋網路 (FFN) 子層的隱
+  藏維度大小。在 SwiGLU 配置中，這是閘控機制前的中間投影大小。
 
-These are the specific configurations for the models mentioned above,
-extracted from ~modelconfigs.py~:
+以下是上述模型的具體配置，提取自 ~modelconfigs.py~:
 
 *** b11c96h3tfrs (1.3M params)
 - **Layers**: 11 blocks (`transformerropesg`)
 - **Trunk Channels**: 96
 - **Transformer Heads**: 3
-- **KV Heads**: 3 (Standard Multi-Head Attention, not GQA)
+- **KV Heads**: 3 (標準多頭注意力，非 GQA)
 - **FFN Channels**: 256
 - **Features**: RoPE, SwiGLU
 
