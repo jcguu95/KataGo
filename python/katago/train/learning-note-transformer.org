@@ -12,8 +12,14 @@
 *** RoPE (旋轉位置編碼)
 使用 2D RoPE (~precompute_freqs_cos_sin_2d~) 來處理圍棋棋盤的空間網格。
 - 原理：RoPE 通過將查詢 (Query) 和鍵 (Key) 向量旋轉一個角度來編碼相對位置訊息。
-  對於圍棋這種 2D 網格，它將 x 和 y 軸的頻率分開計算，使得模型能夠感知棋子之間
-  的相對歐幾里得距離和方向。
+  具體來說，它將嵌入向量中的特徵成對分組，並視為複平面上的點。對於位置 $m$ 和頻率 $\theta$，
+  它透過乘以 $e^{i m \theta}$ 進行旋轉：
+  
+  $f_{q,k}(x_m, m) = (x_m + i y_m) e^{i m \theta} = (x_m \cos(m\theta) - y_m \sin(m\theta)) + i(x_m \sin(m\theta) + y_m \cos(m\theta))$
+
+  對於圍棋這種 2D 網格，它將 x 和 y 軸的頻率分開計算，將一半的特徵用於編碼 X
+  坐標，另一半用於編碼 Y 坐標，使得模型能夠感知棋子之間的相對歐幾里得距離和方
+  向。
 - 優勢：相比於絕對位置編碼 (Absolute PE)，RoPE 對於序列長度（棋盤大小）的泛化
   能力更好，且能保留平移不變性 (translation invariance) 的特性，這對於理解局部
   棋形非常重要。
@@ -30,6 +36,10 @@
 取代 LayerNorm (Layer Normalization)。
 - 差異：RMSNorm (Root Mean Square Normalization) 省略了 LayerNorm 中的均值中心
   化 (mean centering) 步驟，僅根據均方根進行縮放。
+- 公式：
+  $\bar{a}_i = \frac{a_i}{\text{RMS}(a)} g_i, \quad \text{where } \text{RMS}(a)
+             = \sqrt{\frac{1}{n} \sum_{i=1}^{n} a_i^2}$
+  其中 $g_i$ 是可學習的縮放參數。
 - 優勢：計算上更簡潔高效，且在實驗中發現對於深層 Transformer 的訓練穩定性有幫
   助。它讓梯度在反向傳播時更穩定，減少了梯度消失或爆炸的風險。
 
@@ -53,9 +63,21 @@
 * 優化器：Muon (Optimization: Muon)
 訓練迴圈使用一個名為 Muon 的自定義優化器
 (~train_transformer_katago/muon_kissin.py~)，改編自 "Moonlight" 專案。
-- 它使用 Newton-Schulz 迭代進行正交化 (~zeropower_via_newtonschulz5~)。
+- 機制：Muon 是一種動量 SGD 優化器，但它不直接更新權重，而是將權重矩陣投影到正交群上。
+  這相當於對梯度進行白化 (whitening) 處理，使得每一步更新都能更有效地調整權重的內部結構。
+  - 為什麼投影到正交群？
+    這確保了更新矩陣 $U$ 滿足 $U^T U = I$。這樣的更新具有「最大化梯度相關性」
+    的特性，同時約束了更新步長在各個方向上的尺度。簡單來說，標準 SGD 可能會因
+    為某些特徵值的尺度過大而導致訓練不穩定；透過投影到正交群，Muon 強制讓所有
+    奇異值都為 1，這意味著它在所有方向上以相同的「速度」學習，防止梯度爆炸或消
+    失，並允許使用比傳統優化器大得多的學習率。
+- 具體運作：它使用 Newton-Schulz 迭代法來高效計算矩陣的逆平方根，從而實現近似
+  正交化，而無需昂貴的 SVD 分解。迭代公式：$X_{k+1} = \frac{1}{2} X_k (3I - X_k^T
+  X_k)$ (此為 NS 迭代的一種形式，Muon 使用更高級的五階變體)。
 - 它根據參數的形狀（2D 與更大）和名稱（例如跳過嵌入/輸出層）以不同方式處理參數。
-- 它與輔助的 Adam 優化器結合使用 (~MuonWithAuxAdamKimi~)。
+- 它與輔助的 Adam 優化器結合使用 (~MuonWithAuxAdamKimi~)，通常 Muon 負責主要的
+  Transformer 矩陣（如 Attention 和 FFN），而 Adam 負責 Embedding 和
+  Normalization 層。
 
 * 訓練流程 (Training Pipeline) - (~train_muon_ki.py~)
 - 多 GPU (Multi-GPU)：支援 DistributedDataParallel (DDP)。
@@ -67,6 +89,12 @@
 * 匯出與推論 (Export & Inference)
 - ONNX 匯出：提供了 ~export_onnx.py~ 用於將訓練好的 PyTorch 檢查點轉換為
   ONNX。這包括量化支援 (INT8) 和元數據注入。
+  - ONNX 的優勢：
+    1. 跨平台相容性：ONNX (Open Neural Network Exchange) 是一個開放標準，允許模型脫離 PyTorch 環境，在不同的推論引擎（如 ONNX Runtime, TensorRT）上運行。
+    2. 硬體加速：支援透過 TensorRT 等工具針對特定硬體（NVIDIA GPU）進行圖層融合 (Layer Fusion) 和核心優化，通常能比原生 PyTorch 執行得更快。
+    3. 部署靈活性：KataGo 的 C++ 引擎整合 ONNX Runtime 後，可以直接讀取這種標
+       準格式，而不需要手寫複雜的 C++ 權重載入邏輯來對應 Transformer 的複雜結
+       構。
 - 傳統匯出： ~export_model_pytorch.py~ 用於匯出為標準 KataGo `.bin` 格式，
   但 README 建議 Transformer 模型主要用於透過修改後的 KataGo 引擎 ("KataGomo")
   使用 ONNX。
