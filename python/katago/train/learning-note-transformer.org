@@ -10,14 +10,37 @@
 核心邏輯位於 ~train_transformer_katago/model_pytorch.py~。
 它實作了 ~TransformerRoPEGQABlock~ 來取代標準的殘差區塊 (Residual Blocks)。
 *** RoPE (旋轉位置編碼)
-使用 2D RoPE (~precompute_freqs_cos_sin_2d~) 來處理圍棋棋盤的空間網格，這至關重
-要，因為 Transformer 預設具有排列不變性 (permutation-invariant)。
+使用 2D RoPE (~precompute_freqs_cos_sin_2d~) 來處理圍棋棋盤的空間網格。
+- 原理：RoPE 通過將查詢 (Query) 和鍵 (Key) 向量旋轉一個角度來編碼相對位置訊息。
+  對於圍棋這種 2D 網格，它將 x 和 y 軸的頻率分開計算，使得模型能夠感知棋子之間
+  的相對歐幾里得距離和方向。
+- 優勢：相比於絕對位置編碼 (Absolute PE)，RoPE 對於序列長度（棋盤大小）的泛化
+  能力更好，且能保留平移不變性 (translation invariance) 的特性，這對於理解局部
+  棋形非常重要。
+
 *** SwiGLU
-在前饋神經網路中使用 SwiGLU 激活函數，這是現代 LLM（如 LLaMA/PaLM）中常見的改進。
+在前饋神經網路 (FFN) 中使用 SwiGLU 激活函數。
+- 公式：SwiGLU(x) = Swish(xW) \cdot (xV)，其中 Swish(z) = z \cdot sigmoid(z)。
+- 結構：標準 Transformer 的 FFN 通常是兩個線性層中間夾一個 ReLU/GELU。SwiGLU
+  則使用了三個線性映射（Gate, Value, Output），雖然增加了參數量，但在相同的計
+  算預算下通常能提供更好的收斂性和性能。
+- 來源：這是現代 LLM（如 LLaMA, PaLM）中常見的架構改進。
+
 *** RMSNorm
-取代 LayerNorm，這是現代 Transformer 中的另一個標準優化。
+取代 LayerNorm (Layer Normalization)。
+- 差異：RMSNorm (Root Mean Square Normalization) 省略了 LayerNorm 中的均值中心
+  化 (mean centering) 步驟，僅根據均方根進行縮放。
+- 優勢：計算上更簡潔高效，且在實驗中發現對於深層 Transformer 的訓練穩定性有幫
+  助。它讓梯度在反向傳播時更穩定，減少了梯度消失或爆炸的風險。
+
 *** GQA (分組查詢注意力)
-程式碼支援 GQA，雖然 README 指出它預設可能被禁用或是實驗性的。
+程式碼支援 GQA (Grouped Query Attention)。
+- 機制：介於 MHA (Multi-Head Attention) 和 MQA (Multi-Query Attention) 之間。
+  MHA 每個 Query Head 都有對應的 Key/Value Head；MQA 所有 Query Head 共用一組
+  Key/Value Head。GQA 則是將 Query Heads 分組，每組共用一個 Key/Value Head。
+- 目的：大幅減少 KV Cache 的大小（雖然在圍棋這種固定長度的場景下，主要優勢是減
+  少參數和推理時的記憶體頻寬需求），同時保持比 MQA 更好的模型表現。
+- 現狀：README 指出它在此實作中可能被禁用或是實驗性的，視具體配置而定。
 
 ** 模型配置 (Model Configs)
 
