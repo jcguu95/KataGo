@@ -174,3 +174,71 @@
   - ~PolicyHead~ 的輸出處理中，對於 Mask 外部區域的處理邏輯增加了常數張量優化 (~self.t_1~, ~self.t_5000~)，以利於 TensorRT INT8 轉換。
   - 雖然結構相似，但 Transformer 版在許多運算細節上（如常數宣告為 buffer）都為了硬體部署做了微調。
 
+* 檔案摘要 (File Synopses)
+本節列出專案中各檔案的功能摘要。
+- ~train_transformer_katago/dummy_input.py~: 用於生成隨機的虛擬輸入數據，供測試
+  模型結構或初始化使用，無需真實數據。
+- ~train_transformer_katago/muon_kissin.py~: 實作了 Muon 優化器。這是一個動量
+  SGD 的變體，利用牛頓-舒爾茨迭代 (Newton-Schulz iteration) 進行權重的近似正交
+  化，並結合輔助的 Adam 優化器，專為大規模訓練設計。
+- ~train_transformer_katago/view_loss.py~: 工具腳本，用於讀取訓練過程中產生的
+  JSON 指標檔案，並繪製損失 (Loss) 隨時間變化的曲線圖。
+- ~train_transformer_katago/shuffle.sh~: Shell 腳本，用於定期呼叫 ~shuffle.py~ 來
+  打亂和整理 self-play 產生的數據，準備供訓練使用的數據塊。
+- ~train_transformer_katago/clean_checkpoint.py~: 用於清理 PyTorch 檢查點檔案，
+  移除優化器狀態、歷史訓練數據路徑等元數據，以減小發布模型時的檔案大小。
+- ~train_transformer_katago/export.sh~: 自動化匯出訓練模型的腳本，監控訓練目錄，
+  將 PyTorch 檢查點轉換為可供 KataGo 引擎使用的格式並移動到指定目錄。
+- ~train_transformer_katago/metrics_pytorch.py~: 定義了訓練和評估過程中的各種損
+  失函數 (Loss Functions)（如策略損失、價值損失、死活題損失等）以及評估指標的
+  計算邏輯。
+- ~train_transformer_katago/make_superswa.py~: 透過對多個歷史檢查點進行平均
+  (SWA) 或取中位數等操作，創建一個更穩定、泛化能力更好的 "Super SWA" 模型檢查
+  點。
+- ~train_transformer_katago/export_onnx.py~: 將訓練好的 PyTorch 模型匯出為 ONNX
+  格式。支援 INT8 量化 (QAT)、模型簡化，以及添加元數據，以便在 TensorRT 等高效
+  能推理引擎上運行。
+- ~train_transformer_katago/replace_using_swa.py~: 一個工具腳本，用於將檢查點中
+  的原始模型權重替換為 SWA (隨機權重平均) 模型的權重。
+- ~train_transformer_katago/modelconfigs.py~: 定義了各種模型架構的配置參數字典
+  （如層數、通道數、Transformer 頭數、激活函數類型等），供模型初始化使用。
+- ~train_transformer_katago/summarize_old_selfplay_files.py~: 用於掃描和匯總舊的
+  self-play 數據文件 (.npz) 的元數據（如行數、時間戳），用於數據管理。
+- ~train_transformer_katago/README.md~: 專案的主要說明文件，介紹如何訓練
+  Transformer 架構的 KataGo 模型、使用 Muon 優化器以及匯出 ONNX 模型的步驟。
+- ~train_transformer_katago/shuffle.py~: 實際執行數據打亂邏輯的 Python 腳本。它
+  從原始數據目錄中根據冪律分佈採樣，並生成訓練用的 .npz 批次文件。
+- ~train_transformer_katago/run_n2n.sh~: 執行 ~migrate_n2n.py~ 的 shell 腳本範例，
+  用於執行 Net2Net 模型遷移。
+- ~train_transformer_katago/train_muon_ki.py~: 主要的訓練腳本。使用 Muon 優化器
+  進行分佈式數據並行 (DDP) 訓練，包含完整的訓練迴圈、數據加載、SWA 更新和日誌
+  記錄。
+- ~train_transformer_katago/validate_muon.py~: 用於驗證使用 Muon 優化器訓練的模
+  型的腳本，計算驗證集上的各項指標。
+- ~train_transformer_katago/train_muon_ki.sh~: 啟動 ~train_muon_ki.py~ 訓練流程的
+  Shell 腳本，設定了環境變數和預設參數。
+- ~train_transformer_katago/migrate_n2n.py~: 實作 Net2Net (Network to Network)
+  初始化的腳本，將較小/訓練好的模型權重移植到較大/新的模型架構中，以加速訓練收
+  斂。
+- ~train_transformer_katago/data_processing_pytorch.py~: 負責讀取和預處理 .npz
+  訓練數據，包括解析二進位特徵、應用圍棋的 8 種對稱性增強以及構建歷史特徵矩陣。
+- ~train_transformer_katago/validate.py~: 通用的模型驗證腳本，加載模型和數據，計
+  算驗證集上的指標並輸出。
+- ~train_transformer_katago/load_model.py~: 包含加載 PyTorch 模型檢查點的輔助函
+  數，處理狀態字典的鍵名匹配（如移除 DDP 的 ~module.~ 前綴）和 SWA 模型的載入。
+- ~train_transformer_katago/export_model_pytorch.py~: 將 PyTorch 模型權重匯出為
+  KataGo 傳統的二進位格式 (.bin)，供不支援 ONNX 的舊版引擎使用。
+- ~train_transformer_katago/model_print.py~: 簡單的除錯工具，用於列印模型檢查點
+  中的配置參數、鍵名列表和訓練狀態。
+- ~train_transformer_katago/model_pytorch.py~: 定義了神經網路的核心架構，包括
+  ~Model~ 類別、ResNet 區塊、Transformer (RoPE/GQA) 區塊、以及策略頭
+  (~PolicyHead~) 和價值頭 (~ValueHead~)。
+- ~train_transformer_katago/metrics_logging.py~: 負責訓練過程中的指標累積（移動
+  平均）和將指標寫入 JSON 日誌文件。
+- ~train_transformer_katago/qat_helper.py~: 輔助腳本，提供針對 TensorRT 優化的量
+  化感知訓練 (QAT) 配置，並定義了哪些層應該跳過量化。
+- ~train_transformer_katago/save_model_for_export_manual.py~: 用於手動將訓練中的
+  檢查點保存為可匯出的格式的腳本，不依賴於訓練迴圈的週期性匯出。
+- ~train_transformer_katago/generate_empty_checkpoint.py~: 根據指定的模型配置名
+  稱，生成一個未經訓練的、隨機初始化的空模型檢查點。
+
